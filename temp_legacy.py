@@ -57,9 +57,9 @@ iq1 = i1 + 1j * q1
 data = sdr.rx()
 
 Rx_0=data[0]
-#Rx_1=data[1]
-#Rx_total = Rx_0 + Rx_1
-Rx_total = Rx_0
+Rx_1=data[1]
+Rx_total = Rx_0 + Rx_1
+#Rx_total = Rx_0
 NumSamples = len(Rx_total)
 win = np.hamming(NumSamples)
 y = Rx_total * win

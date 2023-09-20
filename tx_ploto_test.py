@@ -5,7 +5,7 @@ Created on Thu Sep 14 17:00:02 2023
 @author: trefi
 """
 
-#import adi
+import adi
 import time
 import matplotlib.pyplot as plt
 import numpy as np
@@ -143,7 +143,7 @@ if use_sdr:
 
 
 # dummy receiver
-if not(use_sdr):
+if 0:
     
     tx_sig = full_frame_rep[:,0];
     
