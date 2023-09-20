@@ -22,7 +22,7 @@ if 0:
     data = mat['data']
     print(len(data[0]), len(data[1]))
 
-
+# load_idx = 1, 2
 load_idx = 2
 path_load = f'C:\dev\git_tutor\python_sdr\pluto_{load_idx}.mat'
 
@@ -30,6 +30,10 @@ path_load = f'C:\dev\git_tutor\python_sdr\pluto_{load_idx}.mat'
 do_cfo_corr = 1
 do_ce = 1
 SNR = 5.0
+
+# fullIRC
+do_full_irc = 1
+do_rand_proj = 1
 
 use_sdr = 0
 
@@ -199,10 +203,35 @@ if 1:
     data = mat['data']
     
 
-    Rx_0=data[0]
-    Rx_1=data[1]
+    Rx_0 = data[0]
+    Rx_1 = data[1]
+    
+    # measure power for each Rx    
+    
+    # process covariance matrix
+    R = data @ np.conj(data).T
+    R = R / data.shape[1]
+    
+    print(f'powRx1={np.abs(R[0,0])}, powRx2={np.abs(R[1,1])}')
+    
+    [u1, s1, v1] = np.linalg.svd(R)
+    
     Rx_total = Rx_0 + Rx_1
     Rx_total = Rx_0
+        
+    
+    if do_full_irc:
+        u_main = u1[:, 0]
+        
+        if do_rand_proj:
+            
+            u_main = rng.randn(2, 1) + 1.0 * 1j*rng.randn(2, 1)
+            u_main = u_main[:,0]
+        
+        data_eig = np.conj(u_main).T @ data
+    
+        Rx_total = data_eig
+    
     NumSamples = len(Rx_total)
     win = np.hamming(NumSamples)
     y = Rx_total * win
