@@ -14,7 +14,7 @@ import numpy.matlib
 
 # receiver params
 do_cfo_corr = 1
-do_ce = 1
+do_ce = 0
 SNR = 5.0
 
 use_sdr = 0
