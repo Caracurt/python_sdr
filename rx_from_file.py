@@ -65,7 +65,7 @@ if use_sdr:
     
 
 # OFDM sig parameters
-delta_t = 1 / sample_rate;
+delta_t = 1 / sample_rate
 
 delta_f = 30e3
 frac_guard = 0.5

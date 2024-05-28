@@ -23,12 +23,12 @@ if 0:
     print(len(data[0]), len(data[1]))
 
 # load_idx = 1, 2
-load_idx = 2
+load_idx = 3
 path_load = f'C:\dev\git_tutor\python_sdr\pluto_{load_idx}.mat'
 
 # receiver params
 do_cfo_corr = 1
-do_ce = 1
+do_ce = 0
 SNR = 5.0
 
 # fullIRC
@@ -46,7 +46,7 @@ num_samps = tti_len * 20 # number of samples returned per call to rx()
 rng = np.random.RandomState(123)
 
 
-if use_sdr:
+if 0:
     tx_gain0 = 0
     sdr = adi.Pluto('ip:192.168.2.2')
     sdr.gain_control_mode_chan0 = 'manual'
@@ -164,14 +164,14 @@ if 1:
     
     # configure RxSDR
     # Create radio
-    if 0:
+    if 1:
         sdr = adi.ad9361(uri='ip:192.168.2.1')
         samp_rate = sample_rate    # must be <=30.72 MHz if both channels are enabled
         num_samps = FrameSize      # number of samples per buffer.  Can be different for Rx and Tx
         rx_lo = int(center_freq)
         rx_mode = "slow_attack"  # can be "manual" or "slow_attack"
-        rx_gain0 = 40
-        rx_gain1 = 40
+        rx_gain0 = 70
+        rx_gain1 = 70
         tx_lo = rx_lo
         tx_gain0 = -10
         tx_gain1 = -10
@@ -182,13 +182,13 @@ if 1:
         sdr.rx_lo = int(rx_lo)
         sdr.gain_control_mode = rx_mode
         sdr.rx_hardwaregain_chan0 = int(rx_gain0)
-        #sdr.rx_hardwaregain_chan1 = int(rx_gain1)
+        sdr.rx_hardwaregain_chan1 = int(rx_gain1)
         sdr.rx_buffer_size = int(num_samps)
     
     
     ts = 1 / float(sample_rate)
     
-    data = sdr.rx()
+    #data = sdr.rx()
     
     
     # save log in matfile
@@ -202,9 +202,12 @@ if 1:
     mat = scipy.io.loadmat(path_load)
     data = mat['data']
     
+    data = np.array(data)
 
-    Rx_0 = data[0]
+    Rx_0 = data[0]    
     Rx_1 = data[1]
+    
+    #data[0] = data[1]
     
     # measure power for each Rx    
     

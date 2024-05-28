@@ -6,21 +6,20 @@ Created on Wed Sep 20 21:23:05 2023
 """
 
 import adi
-import time
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy
 import numpy.matlib
+import scipy
 
 # receiver params
 do_cfo_corr = 1
-do_ce = 0
-SNR = 5.0
+do_ce = 1
+SNR = 50.0
 
 use_sdr = 0
 
 do_save_mat = 1
-save_idx = 2
+save_idx = 100
 
 sample_rate = 20e6 # Hz
 center_freq = 2.0e9 # Hz
@@ -31,9 +30,9 @@ num_samps = tti_len * 20 # number of samples returned per call to rx()
 rng = np.random.RandomState(123)
 
 
-if use_sdr:
+if 0:
     tx_gain0 = 0
-    sdr = adi.Pluto('ip:192.168.2.2')
+    sdr = adi.Pluto('ip:192.168.2.1')
     sdr.gain_control_mode_chan0 = 'manual'
     sdr.rx_hardwaregain_chan0 = 70.0 # dB
     sdr.rx_lo = int(center_freq)
@@ -42,10 +41,10 @@ if use_sdr:
     sdr.rx_buffer_size = num_samps
     
     '''Configure Tx properties'''
-    sdr.tx_rf_bandwidth = int(sample_rate)
-    sdr.tx_lo = int(center_freq)
-    sdr.tx_cyclic_buffer = True
-    sdr.tx_hardwaregain_chan0 = int(tx_gain0)
+    #sdr.tx_rf_bandwidth = int(sample_rate)
+    #sdr.tx_lo = int(center_freq)
+    #sdr.tx_cyclic_buffer = True
+    #sdr.tx_hardwaregain_chan0 = int(tx_gain0)
     #sdr.tx_hardwaregain_chan1 = int(tx_gain1)
     
 
@@ -81,7 +80,7 @@ preamble_full_cp = np.concatenate((preamble_full[-CP_len:], preamble_full))
 pream_len = preamble.shape[0]
 
 
-data_stream = rng.randint(0, 2, size=(int(BlockSize), 1));
+data_stream = rng.randint(0, 2, size=(int(BlockSize), 1))
 mod_sym_pilot = 1.0 - 2.0 * np.complex64(data_stream)
 
 tx_ofdm_sym = np.zeros((N_fft, 1), dtype=np.complex64);
@@ -122,8 +121,8 @@ print(f'FrameLen={frame_len}')
 num_rep = 3
 full_frame_rep = np.matlib.repmat(full_frame, num_rep, 1)
 
-FrameSize = full_frame_rep.shape[0];
-sig_len = full_frame_rep.shape[0];
+FrameSize = full_frame_rep.shape[0]
+sig_len = full_frame_rep.shape[0]
 
 plt.figure(1)
 x_arr = np.arange(0, FrameSize)
@@ -149,13 +148,13 @@ if 1:
     
     # configure RxSDR
     # Create radio
-    sdr = adi.ad9361(uri='ip:192.168.2.1')
+    sdr = adi.ad9361(uri='ip:192.168.1.1')
     samp_rate = sample_rate    # must be <=30.72 MHz if both channels are enabled
     num_samps = FrameSize      # number of samples per buffer.  Can be different for Rx and Tx
     rx_lo = int(center_freq)
     rx_mode = "slow_attack"  # can be "manual" or "slow_attack"
-    rx_gain0 = 40
-    rx_gain1 = 40
+    rx_gain0 = 70
+    rx_gain1 = 70
     tx_lo = rx_lo
     tx_gain0 = -10
     tx_gain1 = -10
@@ -198,16 +197,17 @@ if 1:
     xf = np.fft.fftfreq(NumSamples, ts)
     xf = np.fft.fftshift(xf[1:-1])/1e6
     plt.figure(10)
+    plt.title('Receive Spectrum')
     plt.plot(xf, s_dbfs)
     plt.xlabel("frequency [MHz]")
     plt.ylabel("dBfs")
     #plt.draw()
-    plt.show()
+    #plt.show()
     
     
     if 1:
                 
-        tx_sig = full_frame_rep[:,0];
+        tx_sig = full_frame_rep[:,0]
         
         L = int(CP_len/8) # channel impulse response
         #L = 1
@@ -228,7 +228,7 @@ if 1:
         noise_vect = np.complex64(noise_vect[:, 0])
         
         # add awgn
-        rx_sig = rx_sig + noise_vect;
+        rx_sig = rx_sig + noise_vect
         
         rx_sig = Rx_total
         L_tot = len(rx_sig)
@@ -247,6 +247,7 @@ if 1:
         x_arr = np.arange(0, L_tot)
         plt.figure(2)
         plt.plot(x_arr[:], np.real(rx_sig[:]))
+        plt.title('Raw Receive Signal')
         plt.grid()
         
         # find start position of frame
@@ -285,6 +286,7 @@ if 1:
         plt.figure(4)
         x_arr = np.arange(0, frame_len)
         plt.plot(x_arr, np.real(frame_receive))
+        plt.title('After compensate CFO')
         plt.grid()
             
             
@@ -309,8 +311,10 @@ if 1:
         h_time = np.fft.ifft(h_ls, N_fft, 0, norm='ortho')
         
         plt.figure(100)
+        plt.title('Channel response time domain')
         plt.plot(np.arange(0, N_fft), np.abs(h_time))
         plt.grid()
+
         
         W_spead = int(CP_len/8)
         W_sync_err = int(CP_len)
@@ -343,6 +347,7 @@ if 1:
         
         plt.figure(6)
         x_arr = np.arange(0, N_sc_use)
+        plt.title('Channel response frequency')
         plt.plot(x_arr, np.real(h_ls))
         plt.grid()
         
@@ -352,6 +357,7 @@ if 1:
         
         plt.figure(7)
         x_arr = np.arange(0, N_fft)
+        plt.title('Receive freq domain true data')
         plt.plot(x_arr, np.real(rec_data_sym_freq))
         plt.grid()
         
@@ -386,6 +392,8 @@ if 1:
         
         ber = 1.0 * err_num / N_sc_use
         print(f'BER={ber}')
+        plt.show()
+        ff = 1
     
     
     
@@ -401,3 +409,5 @@ if 0:
     scipy.io.savemat(path_save, {'rx_sig': rx_sig})
     
     print(rx_sig[0:10])
+
+plt.show()

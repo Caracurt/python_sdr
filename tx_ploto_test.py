@@ -79,7 +79,7 @@ preamble_full_cp = np.concatenate((preamble_full[-CP_len:], preamble_full))
 pream_len = preamble.shape[0]
 
 
-data_stream = rng.randint(0, 2, size=(int(BlockSize), 1));
+data_stream = rng.randint(0, 2, size=(int(BlockSize), 1))
 mod_sym_pilot = 1.0 - 2.0 * np.complex64(data_stream)
 
 tx_ofdm_sym = np.zeros((N_fft, 1), dtype=np.complex64);
@@ -335,3 +335,4 @@ if 0:
     scipy.io.savemat(path_save, {'rx_sig': rx_sig})
     
     print(rx_sig[0:10])
+
