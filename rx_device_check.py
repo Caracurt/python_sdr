@@ -5,7 +5,8 @@ import numpy.matlib
 import scipy
 
 
-sdr = adi.ad9361(uri='ip:192.168.1.1')
+#sdr = adi.ad9361(uri='ip:192.168.1.1')
+sdr = adi.Pluto(uri='ip:192.168.1.1')
 sdr.rx_enabled_channels = [0, 1]
 data = sdr.rx()
 

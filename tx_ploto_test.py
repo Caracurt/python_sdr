@@ -48,7 +48,7 @@ if use_sdr:
     
 
 # OFDM sig parameters
-delta_t = 1 / sample_rate;
+delta_t = 1 / sample_rate
 
 delta_f = 30e3
 frac_guard = 0.5
@@ -120,8 +120,8 @@ print(f'FrameLen={frame_len}')
 num_rep = 3
 full_frame_rep = np.matlib.repmat(full_frame, num_rep, 1)
 
-FrameSize = full_frame_rep.shape[0];
-sig_len = full_frame_rep.shape[0];
+FrameSize = full_frame_rep.shape[0]
+sig_len = full_frame_rep.shape[0]
 
 plt.figure(1)
 x_arr = np.arange(0, FrameSize)
@@ -138,8 +138,14 @@ if use_sdr:
     #data = np.arange(1, 10, 3)
     # Send
     #sdr.tx(data)
-    print('Success tx')
-    ff = 1
+    print('Success tx : enter if exit')
+    try:
+        ue_in = input()
+        if ue_in == 'E' and ue_in == 'e':
+            raise KeyboardInterrupt()
+    except KeyboardInterrupt:
+        exit(1)
+        ff = 1
 
 
 # dummy receiver
