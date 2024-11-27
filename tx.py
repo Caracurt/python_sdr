@@ -71,13 +71,19 @@ tf.random.set_seed(123)
 preamble = create_preamble(N_fft, CP_len, 2)
 
 NUM_BITS_PER_SYMBOL = num_bits_sym
-
 binary_source = sn.utils.BinarySource()
-constellation = sn.mapping.Constellation("qam", NUM_BITS_PER_SYMBOL, trainable=True) # The constellation is set to be trainable
 
-# Mapper and demapper
-mapper = sn.mapping.Mapper(constellation=constellation)
-demapper = sn.mapping.Demapper("maxlog", constellation=constellation)
+
+if num_bits_sym > 1:
+
+     # The constellation is set to be trainable
+    constellation = sn.mapping.Constellation("qam", NUM_BITS_PER_SYMBOL, trainable=True)
+    # Mapper and demapper
+    mapper = sn.mapping.Mapper(constellation=constellation)
+    demapper = sn.mapping.Demapper("maxlog", constellation=constellation)
+else:
+    mapper = list()
+    demapper = list()
 
 
 mod_dict_pilot = dict()
