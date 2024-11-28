@@ -28,6 +28,7 @@ do_cfo_corr = 1
 do_ce = 1
 dc_offset = 0
 
+do_pilot_cont = False
 
 def create_preamble(N_fft, CP_len, N_repeat = 2):
     preamble = 1 - 2 * np.random.randint(0, 2, size=(int(N_fft/2), 1))
@@ -66,8 +67,13 @@ def create_data(N_sc, N_fft, CP_len, mod_dict_data, dc_offset = False, return_fr
     else:
         return time_ofdm_sym_cp_pilot
 
-np.random.seed(123)
-tf.random.set_seed(123)
+if do_pilot_cont: # pilot contamination case
+    np.random.seed(123)
+    tf.random.set_seed(123)
+else:
+    np.random.seed(321)
+    tf.random.set_seed(321
+                       )
 preamble = create_preamble(N_fft, CP_len, 2)
 
 NUM_BITS_PER_SYMBOL = num_bits_sym
@@ -107,6 +113,7 @@ FrameSize = len(repeated_frame)
 
 tx_gain0 = 0
 sdr = adi.Pluto('ip:192.168.3.3') # interfere cfg
+
 #sdr = adi.Pluto('ip:192.168.1.1')
 
 sdr.gain_control_mode_chan0 = 'manual'

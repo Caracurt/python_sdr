@@ -79,6 +79,13 @@ def create_data(N_sc, N_fft, CP_len, mod_dict_data : dict, dc_offset=False, adit
 #############################################################################
 def find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx):
     corr_list = []
+
+    if False:
+        ax1 = plt.gca()
+        ax1.plot(range(rx_sig.shape[1]), np.abs(rx_sig[0, :]))
+        ax1.grid()
+        plt.show()
+
     for idx_search in range(start_idx, start_idx + frame_len):
         corr_fin = 0.0
         for rx_idx in range(rx_sig.shape[0]):
@@ -95,20 +102,48 @@ def find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx):
     rel_idx = np.argmax(np.abs(corr_list_new), axis=0)
     idx_max = rel_idx + start_idx
 
-    plt.figure(10)
-    ax_corr = plt.gca()
-    ax_corr.plot(range(len(corr_list)), np.array(corr_list_new), label='Orig')
+
 
     filter_cp = np.ones(CP_len) / np.sqrt(CP_len)
     corr_list_filt = np.convolve(filter_cp, corr_list_new, mode='same')
 
     rel_idx_filt = np.argmax(np.abs(corr_list_filt), axis=0)
     idx_max_filt = rel_idx_filt + start_idx
-    idx_max_filt = idx_max_filt + int(CP_len/2)
+    prot_shift = 10 # heuristic value
+    idx_max_filt = idx_max_filt + int(CP_len/2) - prot_shift
 
-    ax_corr.plot(range(len(corr_list)), corr_list_filt, label='filt')
-    ax_corr.grid()
-    plt.legend()
+    if False:
+        plt.figure(10)
+        ax_corr = plt.gca()
+        ax_corr.plot(range(len(corr_list)), np.array(corr_list_new), label='Orig')
+        ax_corr.plot(range(len(corr_list)), corr_list_filt, label='filt')
+        ax_corr.grid()
+        plt.legend()
+
+    # estimation of SNR
+    frame_tmp = rx_sig[:, idx_max_filt : idx_max_filt + frame_len]
+
+    frame_tmp_noise = frame_tmp[:, -2*CP_len:-CP_len] # save region of pure noise
+
+    sigma_arr = np.diag(frame_tmp_noise @ frame_tmp_noise.conj().T) / frame_tmp_noise.shape[1]
+    frame_preamb =frame_tmp[:, :2*preamble_len]
+    Es_arr = np.diag(frame_preamb @ frame_preamb.conj().T) / frame_preamb.shape[1]
+
+    SNR_guard = 10.0 * np.log10( np.abs(Es_arr) / np.abs(sigma_arr)  )
+
+    print(f'Guard SNR={SNR_guard} sigma_arr={sigma_arr}')
+
+    ax1 = plt.gca()
+
+    for rx_idx in range(frame_tmp.shape[0]):
+        ax1.plot(range(frame_tmp.shape[1]), np.abs(frame_tmp[rx_idx, :]))
+        ax1.grid()
+
+        ax2 = plt.gca()
+        ax2.plot(range(frame_tmp_noise.shape[1]), np.abs(frame_tmp_noise[rx_idx, :]))
+        ax2.grid()
+
+    #plt.show()
 
     #plt.show()
 
@@ -116,7 +151,7 @@ def find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx):
         idx_max = idx_max_filt
         rel_idx = rel_idx_filt
 
-    return idx_max, corr_list[rel_idx]
+    return idx_max, corr_list[rel_idx], sigma_arr
 
 
 def cfo(frame_receive, corr_value, preamble_len):
@@ -306,7 +341,7 @@ for ii in range(10):
         data = mat['data']
         data = np.array(data)
 
-    for mimo in [0, 1, 2]:
+    for mimo in [4, 3, 2, 0, 1]:
 
         data = np.array(data)
 
@@ -323,14 +358,14 @@ for ii in range(10):
 
             #rx_sig = rx_sig[0]
 
-        elif mimo == 2:
+        elif (mimo == 2) or (mimo == 3) or (mimo == 4):
 
             rx_sig = data
 
         #rx_sig = data
         num_rx, rx_len = rx_sig.shape
 
-        idx_max, corr_value = find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx=0)
+        idx_max, corr_value, sigma_arr = find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx=0)
         frame_receive = rx_sig[:, idx_max: idx_max + frame_len]
 
         frame_receive = cfo(frame_receive, corr_value, preamble_len) if do_cfo_corr else frame_receive
@@ -339,15 +374,25 @@ for ii in range(10):
         pilot_freq = np.fft.fft(pilot_receive, N_fft, axis=1 ,norm="ortho")
 
         h_ls_all = np.zeros( (num_rx, N_sc_use) , dtype=np.complex64 )
-        rec_sym_pilot_all = np.zeros( (N_sc_use, num_rx) , dtype=np.complex64 )
+        rec_sym_pilot_all = np.zeros( (num_rx, N_sc_use) , dtype=np.complex64 )
+
         for rx_idx in range(num_rx):
             rec_sym_pilot = baseband_freq_domian(pilot_freq[rx_idx, :], N_sc_use)
 
-            rec_sym_pilot_all[:, rx_idx:rx_idx+1] = rec_sym_pilot
+            rec_sym_pilot_all[rx_idx, :] = rec_sym_pilot[:, 0]
 
             # apply CE
             h_ls = rec_sym_pilot[:, 0] / pilot_freq_[:, 0]
             h_ls_all[rx_idx, :] = channel_estimation(h_ls, CP_len, N_fft) if do_ce else h_ls
+
+        # usamples estimation
+        u_mx = rec_sym_pilot_all -h_ls_all[:, :] * pilot_freq_[:, 0]
+
+        Ruu = u_mx @ u_mx.conj().T / u_mx.shape[1]
+        U_t, S_t, v_t = np.linalg.svd(Ruu)
+
+        Ruu_inv = np.linalg.inv(Ruu)
+        print(f'S_t={S_t}')
 
         rec_data_sym = frame_receive[:, 2 * (N_fft + CP_len): 2 * (N_fft + CP_len) + N_fft]
         rec_data_sym_freq = np.fft.fft(rec_data_sym, N_fft, axis=1, norm="ortho")
@@ -366,8 +411,21 @@ for ii in range(10):
 
                 h_c = h_ls_all[:, sc_idx:sc_idx+1]
                 r_c = rec_sym_data_all[:, sc_idx:sc_idx+1]
+                # MRC
+                if mimo == 2:
+                    x_c = np.linalg.inv(h_c.conj().T @ h_c) @ h_c.conj().T @ r_c
+                elif mimo == 3:
+                    # W-MRC // IRC
 
-                x_c = np.linalg.inv(h_c.conj().T @ h_c) @ h_c.conj().T @ r_c
+                    Ruu_d = np.diag(sigma_arr)
+                    Ruu_d = Ruu_d.astype(np.complex64)
+                    Ruu_d_inv = np.linalg.inv(Ruu_d)
+                    x_c = np.linalg.inv(h_c.conj().T @ Ruu_d_inv @ h_c) @ h_c.conj().T @ Ruu_d_inv @ r_c
+
+                elif mimo == 4:
+
+                    x_c = np.linalg.inv(h_c.conj().T @ Ruu_inv @ h_c) @ h_c.conj().T @ Ruu_inv @ r_c
+
                 eq_data[sc_idx] = x_c[0, 0]
 
         plt.figure(figsize=(8, 8))
