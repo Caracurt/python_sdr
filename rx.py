@@ -322,7 +322,7 @@ if not do_load_file:
     sdr.rx_buffer_size = int(num_samps)
 
 
-for ii in range(10):
+for ii in range(1):
 
     if not do_load_file:
         data = sdr.rx()

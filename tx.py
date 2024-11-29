@@ -106,8 +106,8 @@ repeated_frame = np.tile(frame, reps = (3,1))
 FrameSize = len(repeated_frame)
 
 tx_gain0 = 0
-sdr = adi.Pluto('ip:192.168.3.3') # interfere cfg
-#sdr = adi.Pluto('ip:192.168.1.1')
+#sdr = adi.Pluto('ip:192.168.3.3') # interfere cfg
+sdr = adi.Pluto('ip:192.168.1.1')
 
 sdr.gain_control_mode_chan0 = 'manual'
 sdr.rx_hardwaregain_chan0 = 70.0  # dB

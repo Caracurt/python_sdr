@@ -111,7 +111,7 @@ repeated_frame = np.tile(frame, reps = (3,1))
 
 FrameSize = len(repeated_frame)
 
-tx_gain0 = 0
+tx_gain0 = -10
 sdr = adi.Pluto('ip:192.168.3.3') # interfere cfg
 
 #sdr = adi.Pluto('ip:192.168.1.1')
@@ -130,7 +130,7 @@ sdr.tx_cyclic_buffer = True
 sdr.tx_hardwaregain_chan0 = int(tx_gain0)
 
 sdr.tx_buffer_size = FrameSize
-sdr.tx(repeated_frame[:, 0] * 10024.0)
+sdr.tx(repeated_frame[:, 0] * 10024.0 / 3.0)
 
 # data = np.arange(1, 10, 3)
 # Send
