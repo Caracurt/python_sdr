@@ -10,6 +10,28 @@ from IPython import display
 import sionna as sn
 import tensorflow as tf
 
+from matplotlib.animation import FuncAnimation
+
+# tested receiver cfgs
+#cfg_test =[(4, 'IRC'), (3, 'WMMSE'), (2, 'MMSE'), (1, 'EigRx'), (0, 'SumRx')]
+cfg_test =[(4, 'IRC'), (0, 'SumRx')]
+
+num_cfg = len(cfg_test)
+line_arr = list()
+
+fig, ax = plt.subplots()
+ax.grid()
+
+
+colors = ['r-', 'g-', 'b-', 'c-', 'm-', 'y-']
+for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
+    #line_c, = ax.plot([], [], colors[idx], label=name_mimo)
+    line_c, = ax.semilogy([], [], colors[idx], label=name_mimo)
+    line_arr.append(line_c)
+
+ax.legend()
+
+################## INIT START
 sample_rate = 5e6
 center_freq = 2.0e9
 
@@ -131,17 +153,17 @@ def find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx):
 
     SNR_guard = 10.0 * np.log10( np.abs(Es_arr) / np.abs(sigma_arr)  )
 
-    print(f'Guard SNR={SNR_guard} sigma_arr={sigma_arr}')
+    #print(f'Guard SNR={SNR_guard} sigma_arr={sigma_arr}')
 
-    ax1 = plt.gca()
+    if False:
+        ax1 = plt.gca()
+        for rx_idx in range(frame_tmp.shape[0]):
+            ax1.plot(range(frame_tmp.shape[1]), np.abs(frame_tmp[rx_idx, :]))
+            ax1.grid()
 
-    for rx_idx in range(frame_tmp.shape[0]):
-        ax1.plot(range(frame_tmp.shape[1]), np.abs(frame_tmp[rx_idx, :]))
-        ax1.grid()
-
-        ax2 = plt.gca()
-        ax2.plot(range(frame_tmp_noise.shape[1]), np.abs(frame_tmp_noise[rx_idx, :]))
-        ax2.grid()
+            ax2 = plt.gca()
+            ax2.plot(range(frame_tmp_noise.shape[1]), np.abs(frame_tmp_noise[rx_idx, :]))
+            ax2.grid()
 
     #plt.show()
 
@@ -189,7 +211,7 @@ def channel_estimation(h_ls, CP_len, N_fft):
 
     display.clear_output(wait=True)
 
-    if True:
+    if False:
         plt.figure(100)
         plt.plot(np.arange(0, N_fft), np.abs(h_time))
         plt.plot(np.arange(0, N_fft), np.abs(h_time_denoise))
@@ -322,131 +344,171 @@ if not do_load_file:
     sdr.rx_buffer_size = int(num_samps)
 
 #### INIT part is finished
-#def receiver_MIMO(data, mimo_mode):
+def receiver_MIMO(data, mimo_mode):
+    data = np.array(data)
 
-#### RECEIVER PART start
-for ii in range(1):
+    if mimo_mode == 0:
+        rx_sig = np.zeros((1, data.shape[1]), dtype=np.complex64)
+        rx_sig[0, :] = data[0, :] + data[1, :]
 
+    elif mimo_mode == 1:
+
+        R = data @ data.conj().T
+        U1, s1, V1 = np.linalg.svd(R)
+        U_main = U1[:, 0:1]
+        rx_sig = U_main.conj().T @ data
+
+        # rx_sig = rx_sig[0]
+
+    elif (mimo_mode == 2) or (mimo_mode == 3) or (mimo_mode == 4):
+
+        rx_sig = data
+
+    # rx_sig = data
+    num_rx, rx_len = rx_sig.shape
+
+    idx_max, corr_value, sigma_arr = find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx=0)
+    frame_receive = rx_sig[:, idx_max: idx_max + frame_len]
+
+    frame_receive = cfo(frame_receive, corr_value, preamble_len) if do_cfo_corr else frame_receive
+    pilot_receive = frame_receive[:, N_fft + CP_len: 2 * N_fft + CP_len]
+
+    pilot_freq = np.fft.fft(pilot_receive, N_fft, axis=1, norm="ortho")
+
+    h_ls_all = np.zeros((num_rx, N_sc_use), dtype=np.complex64)
+    rec_sym_pilot_all = np.zeros((num_rx, N_sc_use), dtype=np.complex64)
+
+    for rx_idx in range(num_rx):
+        rec_sym_pilot = baseband_freq_domian(pilot_freq[rx_idx, :], N_sc_use)
+
+        rec_sym_pilot_all[rx_idx, :] = rec_sym_pilot[:, 0]
+
+        # apply CE
+        h_ls = rec_sym_pilot[:, 0] / pilot_freq_[:, 0]
+        h_ls_all[rx_idx, :] = channel_estimation(h_ls, CP_len, N_fft) if do_ce else h_ls
+
+    # usamples estimation
+    u_mx = rec_sym_pilot_all - h_ls_all[:, :] * pilot_freq_[:, 0]
+
+    Ruu = u_mx @ u_mx.conj().T / u_mx.shape[1]
+    U_t, S_t, v_t = np.linalg.svd(Ruu)
+
+    Ruu_inv = np.linalg.inv(Ruu)
+    #print(f'S_t={S_t}')
+
+    rec_data_sym = frame_receive[:, 2 * (N_fft + CP_len): 2 * (N_fft + CP_len) + N_fft]
+    rec_data_sym_freq = np.fft.fft(rec_data_sym, N_fft, axis=1, norm="ortho")
+
+    rec_sym_data_all = np.zeros((num_rx, N_sc_use), dtype=np.complex64)
+    for rx_idx in range(num_rx):
+        rx_tmp = baseband_freq_domian(rec_data_sym_freq[rx_idx, :], N_sc_use)
+        rec_sym_data_all[rx_idx, :] = rx_tmp[:, 0]
+
+    if mimo_mode == 0 or mimo_mode == 1:
+        eq_data = rec_sym_data_all[0, :] / h_ls_all[0, :]
+
+    else:
+        eq_data = np.zeros(N_sc_use, dtype=np.complex64)
+        for sc_idx in range(rec_sym_data_all.shape[1]):
+
+            h_c = h_ls_all[:, sc_idx:sc_idx + 1]
+            r_c = rec_sym_data_all[:, sc_idx:sc_idx + 1]
+            # MRC
+            if mimo_mode == 2:
+                x_c = np.linalg.inv(h_c.conj().T @ h_c) @ h_c.conj().T @ r_c
+            elif mimo_mode == 3:
+                # W-MRC // IRC
+
+                Ruu_d = np.diag(sigma_arr)
+                Ruu_d = Ruu_d.astype(np.complex64)
+                Ruu_d_inv = np.linalg.inv(Ruu_d)
+                x_c = np.linalg.inv(h_c.conj().T @ Ruu_d_inv @ h_c) @ h_c.conj().T @ Ruu_d_inv @ r_c
+
+            elif mimo_mode == 4:
+
+                x_c = np.linalg.inv(h_c.conj().T @ Ruu_inv @ h_c) @ h_c.conj().T @ Ruu_inv @ r_c
+
+            eq_data[sc_idx] = x_c[0, 0]
+
+
+    bit_arr = demodulate(eq_data, N_sc_use, mod_dict_data)
+    ber = get_ber(data_stream, bit_arr, N_sc_use)
+    SNR_est = estimate_SNR(pilot_freq, rec_sym_pilot_all, N_sc_use)
+
+    return ber
+
+#### RECEIVER PART start - test reception chain
+if not do_load_file:
+    data = sdr.rx()
+
+    print(f'SDR reception is OK!!!')
+
+    if do_save:
+        #path_save = f'C:\\dev\\git_tutor\\python_sdr\\tmp.mat'
+        path_save = f'tmp.mat'
+        print(path_save)
+        data = np.array(data)
+        scipy.io.savemat(path_save, {'data': data})
+
+    print(data[0].shape)
+else:
+    print(f'Reception from file is OK!!!')
+
+    path_save = f'tmp.mat'
+    mat = scipy.io.loadmat(path_save)
+    data = mat['data']
+    data = np.array(data)
+
+    # test receiver
+
+# FOR DEBUG
+if False:
+    for mimo, rec_name in cfg_test:
+        ber_c = receiver_MIMO(data, mimo)
+        print(f'mimo={mimo} rec_name={rec_name}, ber_c={ber_c}')
+
+
+def update(frame1):
+
+    ### SDR reception
     if not do_load_file:
         data = sdr.rx()
 
         if do_save:
-            #path_save = f'C:\\dev\\git_tutor\\python_sdr\\tmp.mat'
             path_save = f'tmp.mat'
             print(path_save)
             data = np.array(data)
             scipy.io.savemat(path_save, {'data': data})
+            print(data[0].shape)
 
-        print(data[0].shape)
     else:
         path_save = f'tmp.mat'
         mat = scipy.io.loadmat(path_save)
         data = mat['data']
         data = np.array(data)
 
-    for mimo in [4, 3, 2, 0, 1]:
 
-        data = np.array(data)
+    for idx, (mimo, rec_name) in enumerate(cfg_test):
 
-        if mimo == 0:
-            rx_sig = np.zeros( (1, data.shape[1]), dtype=np.complex64 )
-            rx_sig[0, :] = data[0, :] + data[1, :]
+        ber_c = receiver_MIMO(data, mimo)
 
-        elif mimo == 1:
+        x1, y1 = line_arr[idx].get_data()
+        #x1, y1 = line_c.get_data()
 
-            R = data @ data.conj().T
-            U1, s1, V1 = np.linalg.svd(R)
-            U_main = U1[:,0:1]
-            rx_sig = U_main.conj().T @ data
+        x1 = np.append(x1, frame1)
+        y1 = np.append(y1, ber_c)
+        line_arr[idx].set_data(x1, y1)
 
-            #rx_sig = rx_sig[0]
+    return (*line_arr,)
 
-        elif (mimo == 2) or (mimo == 3) or (mimo == 4):
 
-            rx_sig = data
+def init():
+    ax.set_xlim(0, 2*np.pi)
+    #ax.set_ylim(0.0, 0.5)
+    ax.set_ylim(10**(-4), 10**(-0))
 
-        #rx_sig = data
-        num_rx, rx_len = rx_sig.shape
+    return (*line_arr,)
 
-        idx_max, corr_value, sigma_arr = find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx=0)
-        frame_receive = rx_sig[:, idx_max: idx_max + frame_len]
 
-        frame_receive = cfo(frame_receive, corr_value, preamble_len) if do_cfo_corr else frame_receive
-        pilot_receive = frame_receive[:, N_fft + CP_len: 2 * N_fft + CP_len]
-
-        pilot_freq = np.fft.fft(pilot_receive, N_fft, axis=1 ,norm="ortho")
-
-        h_ls_all = np.zeros( (num_rx, N_sc_use) , dtype=np.complex64 )
-        rec_sym_pilot_all = np.zeros( (num_rx, N_sc_use) , dtype=np.complex64 )
-
-        for rx_idx in range(num_rx):
-            rec_sym_pilot = baseband_freq_domian(pilot_freq[rx_idx, :], N_sc_use)
-
-            rec_sym_pilot_all[rx_idx, :] = rec_sym_pilot[:, 0]
-
-            # apply CE
-            h_ls = rec_sym_pilot[:, 0] / pilot_freq_[:, 0]
-            h_ls_all[rx_idx, :] = channel_estimation(h_ls, CP_len, N_fft) if do_ce else h_ls
-
-        # usamples estimation
-        u_mx = rec_sym_pilot_all -h_ls_all[:, :] * pilot_freq_[:, 0]
-
-        Ruu = u_mx @ u_mx.conj().T / u_mx.shape[1]
-        U_t, S_t, v_t = np.linalg.svd(Ruu)
-
-        Ruu_inv = np.linalg.inv(Ruu)
-        print(f'S_t={S_t}')
-
-        rec_data_sym = frame_receive[:, 2 * (N_fft + CP_len): 2 * (N_fft + CP_len) + N_fft]
-        rec_data_sym_freq = np.fft.fft(rec_data_sym, N_fft, axis=1, norm="ortho")
-
-        rec_sym_data_all = np.zeros( (num_rx, N_sc_use) , dtype=np.complex64)
-        for rx_idx in range(num_rx):
-            rx_tmp = baseband_freq_domian(rec_data_sym_freq[rx_idx, :], N_sc_use)
-            rec_sym_data_all[rx_idx, :] = rx_tmp[:, 0]
-
-        if mimo == 0 or mimo == 1:
-            eq_data = rec_sym_data_all[0, :] / h_ls_all[0, :]
-
-        else:
-            eq_data = np.zeros(N_sc_use, dtype=np.complex64)
-            for sc_idx in range(rec_sym_data_all.shape[1]):
-
-                h_c = h_ls_all[:, sc_idx:sc_idx+1]
-                r_c = rec_sym_data_all[:, sc_idx:sc_idx+1]
-                # MRC
-                if mimo == 2:
-                    x_c = np.linalg.inv(h_c.conj().T @ h_c) @ h_c.conj().T @ r_c
-                elif mimo == 3:
-                    # W-MRC // IRC
-
-                    Ruu_d = np.diag(sigma_arr)
-                    Ruu_d = Ruu_d.astype(np.complex64)
-                    Ruu_d_inv = np.linalg.inv(Ruu_d)
-                    x_c = np.linalg.inv(h_c.conj().T @ Ruu_d_inv @ h_c) @ h_c.conj().T @ Ruu_d_inv @ r_c
-
-                elif mimo == 4:
-
-                    x_c = np.linalg.inv(h_c.conj().T @ Ruu_inv @ h_c) @ h_c.conj().T @ Ruu_inv @ r_c
-
-                eq_data[sc_idx] = x_c[0, 0]
-
-        plt.figure(figsize=(8, 8))
-        plt.axes().set_aspect(1.0)
-        plt.grid(True)
-        plt.scatter(np.real(eq_data), np.imag(eq_data), label='Output')
-        plt.scatter(np.real(mod_sym_data), np.imag(mod_sym_data), label='Input')
-        plt.legend(fontsize=20);
-
-        bit_arr = demodulate(eq_data, N_sc_use, mod_dict_data)
-        ber = get_ber(data_stream, bit_arr, N_sc_use)
-        SNR_est = estimate_SNR(pilot_freq, rec_sym_pilot_all, N_sc_use)
-
-        #print(data_stream[:10, 0])
-        #print(bit_arr[:10])
-        print(f'SNRest={SNR_est}')
-        print(f'mimo={mimo} BER={ber}')
-        plt.show()
-
-    time.sleep(1)
-    plt.show()
+ani = FuncAnimation(fig, update, frames=np.linspace(0, 2*np.pi, 1024), init_func=init, blit=True)
+plt.show()

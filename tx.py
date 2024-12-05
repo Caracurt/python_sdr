@@ -20,7 +20,7 @@ N_fft =  2**(int(np.log2(N_sc_av)))
 N_sc_use = int( N_fft * frac_guard)
 guard_length = int( 0.5 * N_fft )
 CP_len = int(N_fft * 0.2 )
-num_bits_sym = 2
+num_bits_sym = 8
 
 BlockSize = N_sc_use * num_bits_sym
 
