@@ -18,18 +18,23 @@ cfg_test =[(4, 'IRC'), (0, 'SumRx')]
 
 num_cfg = len(cfg_test)
 line_arr = list()
+line_snr_arr = list()
 
-fig, ax = plt.subplots()
-ax.grid()
-
+fig, ax = plt.subplots(2)
+ax[0].grid()
+ax[1].grid()
 
 colors = ['r-', 'g-', 'b-', 'c-', 'm-', 'y-']
 for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
     #line_c, = ax.plot([], [], colors[idx], label=name_mimo)
-    line_c, = ax.semilogy([], [], colors[idx], label=name_mimo)
+    line_c, = ax[0].semilogy([], [], colors[idx], label=name_mimo)
     line_arr.append(line_c)
 
-ax.legend()
+    line_c, = ax[1].plot([], [], colors[idx], label=name_mimo)
+    line_arr.append(line_c)
+
+ax[0].legend()
+ax[1].legend()
 
 ################## INIT START
 sample_rate = 5e6
@@ -44,7 +49,7 @@ N_fft = 2 ** (int(np.log2(N_sc_av)))
 N_sc_use = int(N_fft * frac_guard)
 guard_length = int(0.5 * N_fft)
 CP_len = int(N_fft * 0.2)
-num_bits_sym = 8
+num_bits_sym = 4
 
 BlockSize = N_sc_use * num_bits_sym
 
@@ -52,7 +57,7 @@ do_cfo_corr = 1
 do_ce = 1
 dc_offset = 0
 
-do_load_file = True
+do_load_file = False
 do_save = False
 
 def create_preamble(N_fft, CP_len, N_repeat=2):
@@ -60,7 +65,7 @@ def create_preamble(N_fft, CP_len, N_repeat=2):
     preamble = np.complex64(preamble)
     preamble_full = np.tile(preamble, (N_repeat, 1))
     preamble_full_cp = np.concatenate((preamble_full[-CP_len:], preamble_full))
-    return preamble_full_cp
+    return preamble_full_cp, preamble
 
 
 def create_data(N_sc, N_fft, CP_len, mod_dict_data : dict, dc_offset=False, aditional_return=None, ):
@@ -99,7 +104,7 @@ def create_data(N_sc, N_fft, CP_len, mod_dict_data : dict, dc_offset=False, adit
 
 
 #############################################################################
-def find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx):
+def find_edges(rx_sig, frame_len, preamble_len, CP_len, preamble_core, start_idx):
     corr_list = []
 
     if False:
@@ -113,6 +118,10 @@ def find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx):
         for rx_idx in range(rx_sig.shape[0]):
             first_part = rx_sig[rx_idx, idx_search: idx_search + preamble_len]
             second_part = rx_sig[rx_idx, idx_search + preamble_len: idx_search + 2 * preamble_len]
+
+            if True:
+                first_part = first_part * np.conj(preamble_core[:, 0])
+                second_part = second_part * np.conj(preamble_core[:, 0])
 
             corr_now = np.dot(np.conj(first_part), second_part)
 
@@ -173,7 +182,9 @@ def find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx):
         idx_max = idx_max_filt
         rel_idx = rel_idx_filt
 
-    return idx_max, corr_list[rel_idx], sigma_arr
+    SNR_mean = np.mean(SNR_guard)
+
+    return idx_max, corr_list[rel_idx], sigma_arr, SNR_mean
 
 
 def cfo(frame_receive, corr_value, preamble_len):
@@ -297,7 +308,7 @@ else:
 
 np.random.seed(123)
 tf.random.set_seed(123)
-preamble = create_preamble(N_fft, CP_len, 2)
+preamble, preamble_core = create_preamble(N_fft, CP_len, 2)
 
 mod_dict_pilot = dict()
 mod_dict_pilot['num_bit'] = 1
@@ -367,7 +378,7 @@ def receiver_MIMO(data, mimo_mode):
     # rx_sig = data
     num_rx, rx_len = rx_sig.shape
 
-    idx_max, corr_value, sigma_arr = find_edges(rx_sig, frame_len, preamble_len, CP_len, start_idx=0)
+    idx_max, corr_value, sigma_arr, SNR_guard = find_edges(rx_sig, frame_len, preamble_len, CP_len, preamble_core, start_idx=0)
     frame_receive = rx_sig[:, idx_max: idx_max + frame_len]
 
     frame_receive = cfo(frame_receive, corr_value, preamble_len) if do_cfo_corr else frame_receive
@@ -435,7 +446,7 @@ def receiver_MIMO(data, mimo_mode):
     ber = get_ber(data_stream, bit_arr, N_sc_use)
     SNR_est = estimate_SNR(pilot_freq, rec_sym_pilot_all, N_sc_use)
 
-    return ber
+    return ber, SNR_guard
 
 #### RECEIVER PART start - test reception chain
 if not do_load_file:
@@ -462,10 +473,10 @@ else:
     # test receiver
 
 # FOR DEBUG
-if False:
+if True:
     for mimo, rec_name in cfg_test:
-        ber_c = receiver_MIMO(data, mimo)
-        print(f'mimo={mimo} rec_name={rec_name}, ber_c={ber_c}')
+        ber_c, snr_c = receiver_MIMO(data, mimo)
+        print(f'mimo={mimo} rec_name={rec_name}, ber_c={ber_c} snr_c={snr_c}')
 
 
 def update(frame1):
@@ -490,22 +501,37 @@ def update(frame1):
 
     for idx, (mimo, rec_name) in enumerate(cfg_test):
 
-        ber_c = receiver_MIMO(data, mimo)
+        ber_c, snr_c = receiver_MIMO(data, mimo)
 
-        x1, y1 = line_arr[idx].get_data()
+        x1, y1 = line_arr[2 * idx].get_data()
         #x1, y1 = line_c.get_data()
 
         x1 = np.append(x1, frame1)
         y1 = np.append(y1, ber_c)
-        line_arr[idx].set_data(x1, y1)
+        line_arr[2  * idx].set_data(x1, y1)
+
+        x1, y1 = line_arr[2 * idx + 1].get_data()
+        # x1, y1 = line_c.get_data()
+
+        x1 = np.append(x1, frame1)
+        y1 = np.append(y1, snr_c)
+        line_arr[2 * idx + 1].set_data(x1, y1)
 
     return (*line_arr,)
 
 
 def init():
-    ax.set_xlim(0, 2*np.pi)
+    ax[0].set_xlim(0, 2*np.pi)
+    ax[1].set_xlim(0, 2 * np.pi)
+    #ax[0].set_xlabel('Time')
+    ax[0].set_ylabel(f'BER@QAM{2**NUM_BITS_PER_SYMBOL}')
+
+    ax[1].set_xlabel('Time')
+    ax[1].set_ylabel(f'SNRguard')
+
     #ax.set_ylim(0.0, 0.5)
-    ax.set_ylim(10**(-4), 10**(-0))
+    ax[0].set_ylim(10**(-4), 10**(-0))
+    ax[1].set_ylim(0, 40)
 
     return (*line_arr,)
 
