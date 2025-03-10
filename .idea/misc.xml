@@ -3,5 +3,8 @@
   <component name="Black">
     <option name="sdkName" value="D:\dev\radioconda2024" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="D:\dev\radioconda2024" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="C:\dev\radioconda2024" project-jdk-type="Python SDK" />
+  <component name="PythonCompatibilityInspectionAdvertiser">
+    <option name="version" value="3" />
+  </component>
 </project>
