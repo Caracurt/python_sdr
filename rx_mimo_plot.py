@@ -17,7 +17,9 @@ from matplotlib.animation import FuncAnimation
 # tested receiver cfgs
 #cfg_test =[(4, 'IRC'), (3, 'WMMSE'), (2, 'MMSE'), (1, 'EigRx'), (0, 'SumRx')]
 #cfg_test =[(4, 'IRC'), (0, 'MMSE')]
-cfg_test =[(4, 'IRC'), (2, 'MMSE')]
+#cfg_test =[(4, 'IRC'), (2, 'MMSE')]
+#cfg_test =[(14, 'IRC_SMMSE'), (4, 'IRC'), (12, 'MMSE_SMMSE'), (2, 'MMSE')]
+cfg_test =[(102, 'MMSE_SW'), (2, 'MMSE')]
 
 Ntx = 1
 
@@ -25,11 +27,12 @@ num_cfg = len(cfg_test)
 line_arr = list()
 line_snr_arr = list()
 
-num_subplots = 3
+num_subplots = 4
 fig, ax = plt.subplots(num_subplots)
 ax[0].grid() # ber plot
 ax[1].grid() # SNR plot
 ax[2].grid() # correlation plot
+ax[3].grid() # throughput plot
 
 colors = ['r-', 'g-', 'b-', 'c-', 'm-', 'y-']
 for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
@@ -43,9 +46,13 @@ for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
     line_c, = ax[2].plot([], [], colors[idx], label=name_mimo)
     line_arr.append(line_c)
 
+    line_c, = ax[3].plot([], [], colors[idx], label=name_mimo)
+    line_arr.append(line_c)
+
 ax[0].legend()
 ax[1].legend()
 ax[2].legend()
+ax[3].legend()
 
 ################## INIT START
 sample_rate = 5e6
@@ -64,12 +71,20 @@ num_bits_sym = 2
 
 BlockSize = N_sc_use * num_bits_sym
 
+Thr_max = (N_sc_use * num_bits_sym) * (N_sc_use / N_fft) * delta_f / 1e3 # kbit/sec
+
 do_cfo_corr = 1
 do_ce = 1
 dc_offset = 0
 
 do_load_file = False
 do_save = False
+
+# init Thr
+alpha_avg = 0.1
+Thr_dict = dict()
+for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
+    Thr_dict[name_mimo] = 0.0
 
 def create_preamble(N_fft, CP_len, N_repeat=2):
     preamble = 1 - 2 * np.random.randint(0, 2, size=(int(N_fft / 2), 1))
@@ -214,8 +229,23 @@ def baseband_freq_domian(pilot_freq, N_sc_use):
     return rec_sym_pilot
 
 
-def channel_estimation(h_ls, CP_len, N_fft, comb_step=1):
+def channel_estimation(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_mode=0):
     h_time = np.fft.ifft(h_ls, N_fft, 0, norm='ortho')
+
+    if ce_mode == 1:
+        h_time_denoise = np.zeros_like(h_time)
+
+        pos_high = np.where(np.abs(h_time)**2 > sigma_0)
+
+        if len(pos_high) > 0:
+            eta_sw = ( np.abs(h_time[pos_high])**2 - sigma_0 ) / np.abs(h_time[pos_high])**2
+
+            h_time_denoise[pos_high] = eta_sw * h_time[pos_high]
+
+            h_time = h_time_denoise
+
+
+
     ce_len = len(h_ls) * comb_step
 
     W_spead = int(CP_len / 2 / comb_step)
@@ -397,8 +427,13 @@ if not do_load_file:
     sdr.rx_buffer_size = int(num_samps)
 
 #### INIT part is finished
-def receiver_MIMO(data, mimo_mode, iNtx):
+def receiver_MIMO(data, mimo_mode_in, iNtx):
     data = np.array(data)
+
+    # parse mimo_mode
+    mimo_mode = mimo_mode_in % 10 # extract MIMO detection
+    smmse_mode = int(mimo_mode_in / 10) % 10 # extract SMME mode
+    ce_mode = int(mimo_mode_in / 100) % 10 # CE mode
 
     if mimo_mode == 0:
         rx_sig = np.zeros((1, data.shape[1]), dtype=np.complex64)
@@ -444,7 +479,7 @@ def receiver_MIMO(data, mimo_mode, iNtx):
 
             # apply CE
             h_ls = rec_sym_pilot[comb_start::comb_step, 0] / pilot_tx[tx_idx][comb_start::comb_step, 0]
-            h_ls_all[tx_idx, rx_idx, :] = channel_estimation(h_ls, CP_len, N_fft, comb_step) if do_ce else h_ls
+            h_ls_all[tx_idx, rx_idx, :] = channel_estimation(h_ls, CP_len, N_fft, comb_step, sigma_arr[rx_idx], ce_mode) if do_ce else h_ls
 
         # usamples estimation
         u_mx = rec_sym_pilot_all[:, comb_start::comb_step] - h_ls_all[tx_idx, :, comb_start::comb_step] * pilot_tx[tx_idx][comb_start::comb_step, 0]
@@ -457,7 +492,7 @@ def receiver_MIMO(data, mimo_mode, iNtx):
 
         #print(f'S_t={S_t}')
 
-    Ruu = Ruu / num_rx
+    Ruu = Ruu / iNtx
     U_t, S_t, v_t = np.linalg.svd(Ruu)
     Ruu_inv = np.linalg.inv(Ruu)
 
@@ -484,10 +519,18 @@ def receiver_MIMO(data, mimo_mode, iNtx):
         V_su = np.zeros((num_rx, iNtx), dtype=np.complex64)
         for tx_idx in range(iNtx):
             H_c = h_ls_all[tx_idx, :, :]
-            R_cc = H_c @ H_c.conj().T
-            U_c, S_c, V_c = np.linalg.svd(R_cc)
+            R_hh = H_c @ H_c.conj().T / H_c.shape[1]
+            U_c, S_c, V_c = np.linalg.svd(R_hh)
 
             V_su[:, tx_idx] = U_c[:, 0]
+
+            # SMME start
+            if (smmse_mode > 0):
+                alpha_ruu = 0.3
+                W_smmse = R_hh @ np.linalg.inv(R_hh + alpha_ruu * Ruu)
+
+                h_ls_all[tx_idx, :, :] = W_smmse @ h_ls_all[tx_idx, :, :]
+
 
         if Ntx > 1:
             R_corr = V_su.conj().T @ V_su
@@ -607,6 +650,10 @@ def update(frame1):
 
         ber_c, snr_c, rho_avg_plot = receiver_MIMO(data, mimo, Ntx)
 
+        thr_c =  Thr_max * ( Ntx - np.sum( np.array(ber_c) ))
+
+
+
         x1, y1 = line_arr[num_subplots * idx].get_data()
         #x1, y1 = line_c.get_data()
 
@@ -626,6 +673,19 @@ def update(frame1):
         y1 = np.append(y1, rho_avg_plot)
         line_arr[num_subplots * idx + 2].set_data(x1, y1)
 
+        # plot throughput
+        x1, y1 = line_arr[num_subplots * idx + 3].get_data()
+        x1 = np.append(x1, frame1)
+
+        if len(x1) == 0:
+            Thr_dict[rec_name] = thr_c
+        else:
+            Thr_dict[rec_name] = thr_c * alpha_avg + (1.0 - alpha_avg) * Thr_dict[rec_name]
+
+        y1 = np.append(y1, Thr_dict[rec_name])
+        line_arr[num_subplots * idx + 3].set_data(x1, y1)
+
+
     return (*line_arr,)
 
 
@@ -644,6 +704,11 @@ def init():
     ax[2].set_ylabel(f'SU correlation')
     ax[2].set_xlim(0, 2 * np.pi)
     ax[2].set_ylim(0.0, 1.0)
+
+    ax[3].set_xlabel('Time')
+    ax[3].set_ylabel(f'Throughput')
+    ax[3].set_xlim(0, 2 * np.pi)
+    ax[3].set_ylim(0.0, 1.2 * Thr_max * Ntx)
 
 
 

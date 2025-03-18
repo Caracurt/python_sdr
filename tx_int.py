@@ -18,7 +18,7 @@ frac_guard = 0.5
 N_sc_av = int(sample_rate / delta_f)
 N_fft =  2**(int(np.log2(N_sc_av)))
 N_sc_use = int( N_fft * frac_guard)
-guard_length = int( 0.5 * N_fft )
+guard_length = int( 0.01 * N_fft )
 CP_len = int(N_fft * 0.2 )
 num_bits_sym = 2
 
@@ -111,7 +111,7 @@ repeated_frame = np.tile(frame, reps = (3,1))
 
 FrameSize = len(repeated_frame)
 
-tx_gain0 = -10
+tx_gain0 = 0
 sdr = adi.Pluto('ip:192.168.3.3') # interfere cfg
 
 #sdr = adi.Pluto('ip:192.168.1.1')
