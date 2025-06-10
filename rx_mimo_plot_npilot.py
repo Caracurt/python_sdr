@@ -16,6 +16,8 @@ import tensorflow as tf
 
 from matplotlib.animation import FuncAnimation
 
+from tx_mimo_npilot import create_data, create_preamble
+
 # tested receiver cfgs
 #cfg_test =[(4, 'IRC'), (3, 'WMMSE'), (2, 'MMSE'), (1, 'EigRx'), (0, 'SumRx')]
 #cfg_test =[(4, 'IRC'), (0, 'MMSE')]
@@ -86,54 +88,58 @@ pilot_repeat = 2
 do_load_file = False
 do_save = False
 
+# SC-FDM waveform
+do_sc_fdm = True
+T_prec = np.fft.ifft(np.eye(N_sc_use, dtype=np.complex64), norm='ortho')
+
 # init Thr
 alpha_avg = 0.1
 Thr_dict = dict()
 for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
     Thr_dict[name_mimo] = 0.0
 
-def create_preamble(N_fft, CP_len, N_repeat=2):
-    preamble = 1 - 2 * np.random.randint(0, 2, size=(int(N_fft / 2), 1))
-    preamble = np.complex64(preamble)
-    preamble_full = np.tile(preamble, (N_repeat, 1))
-    preamble_full_cp = np.concatenate((preamble_full[-CP_len:], preamble_full))
-    return preamble_full_cp, preamble
+# def create_preamble(N_fft, CP_len, N_repeat=2):
+#     preamble = 1 - 2 * np.random.randint(0, 2, size=(int(N_fft / 2), 1))
+#     preamble = np.complex64(preamble)
+#     preamble_full = np.tile(preamble, (N_repeat, 1))
+#     preamble_full_cp = np.concatenate((preamble_full[-CP_len:], preamble_full))
+#     return preamble_full_cp, preamble
 
 
 ##############
-def create_data(N_sc, N_fft, CP_len, mod_dict_data, dc_offset = False, return_freq_data = False, aditional_return = False, comb_start=0, comb_step=1):
-
-    if mod_dict_data['num_bit'] == 1:
-        data_stream = 1 - 2 * np.random.randint(0, 2, size=(N_sc, 1))
-        mod_sym_pilot_whole = np.complex64(data_stream)
-
-        mod_sym_pilot = np.zeros_like(mod_sym_pilot_whole)
-        mod_sym_pilot[comb_start::comb_step, :] = mod_sym_pilot_whole[comb_start::comb_step, :]
-
-    else:
-        binary_source = mod_dict_data['binary_source']
-        mapper = mod_dict_data['mapper']
-
-        bits = binary_source([1, N_sc * mod_dict_data['num_bit']])
-
-        data_stream = bits.numpy().T
-
-        mod_sym_pilot = mapper(bits)
-
-        mod_sym_pilot = mod_sym_pilot.numpy().T
-
-    tx_ofdm_sym = np.zeros((N_fft, 1), dtype = np.complex64)
-    dc = int(dc_offset)
-    tx_ofdm_sym[dc : N_sc//2 + dc] = mod_sym_pilot[ N_sc//2: ]
-    tx_ofdm_sym[-N_sc//2: ] = mod_sym_pilot[ 0 : N_sc//2]
-
-    time_ofdm_sym_pilot = np.fft.ifft(tx_ofdm_sym, axis = 0, norm = 'ortho')
-    time_ofdm_sym_cp_pilot = np.concatenate( (time_ofdm_sym_pilot[-CP_len:], time_ofdm_sym_pilot) )
-
-    if not aditional_return:
-        return time_ofdm_sym_cp_pilot, mod_sym_pilot
-    else:
-        return time_ofdm_sym_cp_pilot, mod_sym_pilot, data_stream
+# def create_data(N_sc, N_fft, CP_len, mod_dict_data, dc_offset = False, return_freq_data = False, aditional_return = False, comb_start=0, comb_step=1):
+#
+#     if mod_dict_data['num_bit'] == 1:
+#         data_stream = 1 - 2 * np.random.randint(0, 2, size=(N_sc, 1))
+#         mod_sym_pilot_whole = np.complex64(data_stream)
+#
+#         mod_sym_pilot = np.zeros_like(mod_sym_pilot_whole)
+#         mod_sym_pilot[comb_start::comb_step, :] = mod_sym_pilot_whole[comb_start::comb_step, :]
+#
+#     else:
+#         binary_source = mod_dict_data['binary_source']
+#         mapper = mod_dict_data['mapper']
+#
+#         bits = binary_source([1, N_sc * mod_dict_data['num_bit']])
+#
+#         data_stream = bits.numpy().T
+#
+#         mod_sym_pilot = mapper(bits)
+#
+#         mod_sym_pilot = mod_sym_pilot.numpy().T
+#
+#     tx_ofdm_sym = np.zeros((N_fft, 1), dtype = np.complex64)
+#     dc = int(dc_offset)
+#     tx_ofdm_sym[dc : N_sc//2 + dc] = mod_sym_pilot[ N_sc//2: ]
+#     tx_ofdm_sym[-N_sc//2: ] = mod_sym_pilot[ 0 : N_sc//2]
+#
+#     time_ofdm_sym_pilot = np.fft.ifft(tx_ofdm_sym, axis = 0, norm = 'ortho')
+#     time_ofdm_sym_cp_pilot = np.concatenate( (time_ofdm_sym_pilot[-CP_len:], time_ofdm_sym_pilot) )
+#
+#     if not aditional_return:
+#         return time_ofdm_sym_cp_pilot, mod_sym_pilot
+#     else:
+#         return time_ofdm_sym_cp_pilot, mod_sym_pilot, data_stream
 
 
 #############################################################################
@@ -356,6 +362,8 @@ else:
     mapper = list()
     demapper = list()
 
+
+# Emulate transmission
 np.random.seed(123)
 tf.random.set_seed(123)
 preamble, preamble_core = create_preamble(N_fft, CP_len, 2)
@@ -373,7 +381,7 @@ for tx_idx in range(Ntx):
 
     comb_start = tx_idx
     comb_step = Ntx
-    pilot, pilot_freq = create_data(N_sc_use, N_fft, CP_len, mod_dict_pilot, False, True, False, comb_start, comb_step)
+    pilot, pilot_freq, _ = create_data(N_sc_use, N_fft, CP_len, mod_dict_pilot, False, True, False, comb_start, comb_step)
 
     pilot_tx.append(pilot_freq)
 
@@ -618,7 +626,12 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
 
     ber_arr = list()
     for tx_idx in range(iNtx):
-        bit_arr = demodulate(eq_data[tx_idx, :], N_sc_use, mod_dict_data)
+
+        if do_sc_fdm:
+            bit_arr = demodulate(T_prec.conj().T @ eq_data[tx_idx, :], N_sc_use, mod_dict_data)
+        else:
+            bit_arr = demodulate(eq_data[tx_idx, :], N_sc_use, mod_dict_data)
+
         ber = get_ber(bite_stream_tx[tx_idx], bit_arr, N_sc_use)
 
         ber_arr.append(ber)
