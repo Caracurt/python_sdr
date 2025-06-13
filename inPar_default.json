@@ -1,0 +1,19 @@
+{
+  "description" : "Transmitter config",
+  "sample_rate" : 5e6,
+  "center_freq" : 2.0e9,
+  "device_type" : "ANTsdr",
+  "Ntx" : 1,
+  "delta_f" : 30e3,
+  "frac_guard" : 0.5,
+  "do_cfo_corr" : 1,
+  "do_ce" : 1,
+  "dc_offset" : 0,
+  "pilot_repeat" : 2,
+  "do_sc_fdm" : 1,
+  "Ndata" : 8,
+  "do_fec": 1,
+  "CR" : 0.25,
+  "dummyTx": 0,
+  "dummyRx" : 0
+}

@@ -16,7 +16,9 @@ import tensorflow as tf
 
 from matplotlib.animation import FuncAnimation
 
-from tx_mimo_npilot import create_data, create_preamble
+from tx_mimo_npilot import create_data, create_preamble, create_data_frame, init_tx_dict
+from system_tx import SysParUL
+import json
 
 # tested receiver cfgs
 #cfg_test =[(4, 'IRC'), (3, 'WMMSE'), (2, 'MMSE'), (1, 'EigRx'), (0, 'SumRx')]
@@ -26,7 +28,7 @@ from tx_mimo_npilot import create_data, create_preamble
 #cfg_test =[(102, 'MMSE_SW_rep1'), (2, 'MMSE_rep1')]
 cfg_test =[(2, 'MMSE_rep2'), (2, 'MMSE_rep1')]
 
-Ntx = 1
+
 
 num_cfg = len(cfg_test)
 line_arr = list()
@@ -58,88 +60,6 @@ ax[0].legend()
 ax[1].legend()
 ax[2].legend()
 ax[3].legend()
-
-################## INIT START
-sample_rate = 5e6
-center_freq = 2.0e9
-
-delta_t = 1 / sample_rate
-delta_f = 30e3
-frac_guard = 0.5
-
-N_sc_av = int(sample_rate / delta_f)
-N_fft = 2 ** (int(np.log2(N_sc_av)))
-N_sc_use = int(N_fft * frac_guard)
-guard_length = int(0.5 * N_fft)
-CP_len = int(N_fft * 0.2)
-num_bits_sym = 2
-
-BlockSize = N_sc_use * num_bits_sym
-
-Thr_max = (N_sc_use * num_bits_sym) * (N_sc_use / N_fft) * delta_f / 1e3 # kbit/sec
-
-do_cfo_corr = 1
-do_ce = 1
-dc_offset = 0
-
-# repeatition of pilot feature
-pilot_repeat = 2
-
-do_load_file = False
-do_save = False
-
-# SC-FDM waveform
-do_sc_fdm = True
-T_prec = np.fft.ifft(np.eye(N_sc_use, dtype=np.complex64), norm='ortho')
-
-# init Thr
-alpha_avg = 0.1
-Thr_dict = dict()
-for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
-    Thr_dict[name_mimo] = 0.0
-
-# def create_preamble(N_fft, CP_len, N_repeat=2):
-#     preamble = 1 - 2 * np.random.randint(0, 2, size=(int(N_fft / 2), 1))
-#     preamble = np.complex64(preamble)
-#     preamble_full = np.tile(preamble, (N_repeat, 1))
-#     preamble_full_cp = np.concatenate((preamble_full[-CP_len:], preamble_full))
-#     return preamble_full_cp, preamble
-
-
-##############
-# def create_data(N_sc, N_fft, CP_len, mod_dict_data, dc_offset = False, return_freq_data = False, aditional_return = False, comb_start=0, comb_step=1):
-#
-#     if mod_dict_data['num_bit'] == 1:
-#         data_stream = 1 - 2 * np.random.randint(0, 2, size=(N_sc, 1))
-#         mod_sym_pilot_whole = np.complex64(data_stream)
-#
-#         mod_sym_pilot = np.zeros_like(mod_sym_pilot_whole)
-#         mod_sym_pilot[comb_start::comb_step, :] = mod_sym_pilot_whole[comb_start::comb_step, :]
-#
-#     else:
-#         binary_source = mod_dict_data['binary_source']
-#         mapper = mod_dict_data['mapper']
-#
-#         bits = binary_source([1, N_sc * mod_dict_data['num_bit']])
-#
-#         data_stream = bits.numpy().T
-#
-#         mod_sym_pilot = mapper(bits)
-#
-#         mod_sym_pilot = mod_sym_pilot.numpy().T
-#
-#     tx_ofdm_sym = np.zeros((N_fft, 1), dtype = np.complex64)
-#     dc = int(dc_offset)
-#     tx_ofdm_sym[dc : N_sc//2 + dc] = mod_sym_pilot[ N_sc//2: ]
-#     tx_ofdm_sym[-N_sc//2: ] = mod_sym_pilot[ 0 : N_sc//2]
-#
-#     time_ofdm_sym_pilot = np.fft.ifft(tx_ofdm_sym, axis = 0, norm = 'ortho')
-#     time_ofdm_sym_cp_pilot = np.concatenate( (time_ofdm_sym_pilot[-CP_len:], time_ofdm_sym_pilot) )
-#
-#     if not aditional_return:
-#         return time_ofdm_sym_cp_pilot, mod_sym_pilot
-#     else:
-#         return time_ofdm_sym_cp_pilot, mod_sym_pilot, data_stream
 
 
 #############################################################################
@@ -181,6 +101,9 @@ def find_edges(rx_sig, frame_len, preamble_len, CP_len, preamble_core, start_idx
     idx_max_filt = rel_idx_filt + start_idx
     prot_shift = 10 # heuristic value
     idx_max_filt = idx_max_filt + int(CP_len/2) - prot_shift
+
+    # debug only
+    #idx_max_filt = CP_len # perfect location in case of dummyRx
 
     if False:
         plt.figure(10)
@@ -234,9 +157,15 @@ def cfo(frame_receive, corr_value, preamble_len):
 
 
 def baseband_freq_domian(pilot_freq, N_sc_use):
-    rec_sym_pilot = np.zeros((N_sc_use, 1), dtype=np.complex64)
-    rec_sym_pilot[int(N_sc_use / 2):, 0] = pilot_freq[0 + dc_offset:int(N_sc_use / 2) + dc_offset]
-    rec_sym_pilot[0:int(N_sc_use / 2), 0] = pilot_freq[-int(N_sc_use / 2):]
+
+    if pilot_freq.ndim == 1:
+        rec_sym_pilot = np.zeros((N_sc_use,), dtype=np.complex64)
+        rec_sym_pilot[int(N_sc_use / 2):] = pilot_freq[0 + inPar.dc_offset:int(N_sc_use / 2) + inPar.dc_offset]
+        rec_sym_pilot[0:int(N_sc_use / 2)] = pilot_freq[-int(N_sc_use / 2):]
+    else:
+        rec_sym_pilot = np.zeros((N_sc_use, pilot_freq.shape[1]), dtype=np.complex64)
+        rec_sym_pilot[int(N_sc_use / 2):, :] = pilot_freq[0 + inPar.dc_offset:int(N_sc_use / 2) + inPar.dc_offset, :]
+        rec_sym_pilot[0:int(N_sc_use / 2), :] = pilot_freq[-int(N_sc_use / 2):, :]
 
     return rec_sym_pilot
 
@@ -305,7 +234,7 @@ def estimate_SNR(pilot_freq, rec_sym_pilot, N_sc_use):
 def demodulate(eq_data, N_sc_use, mod_dict):
     bit_arr = []
 
-    if mod_dict_data['num_bit'] == 1:
+    if mod_dict['num_bit'] == 1:
         for idx in range(0, N_sc_use):
 
             if (np.real(eq_data[idx]) > 0):
@@ -318,115 +247,62 @@ def demodulate(eq_data, N_sc_use, mod_dict):
         bit_arr = np.array(bit_arr)
         bit_arr = bit_arr[..., np.newaxis]
     else:
-        eq_data_n = eq_data[..., np.newaxis]
+        #eq_data_n = eq_data[..., np.newaxis]
+        eq_data_n = eq_data
         eq_data_t = tf.cast(eq_data_n.T, np.complex64)
 
         no = 1.0
-        llr_tf = demapper([eq_data_t, no])
+        #llr_tf = demapper([eq_data_t, no])
+        llr_tf = mod_dict["demapper"]([eq_data_t, no])
         llr = llr_tf.numpy()
         bit_arr_t = np.zeros_like(llr)
         bit_arr_t[llr > 0] = 1
-
         bit_arr = bit_arr_t.T
 
-    return bit_arr
+        # perform FEC decoding
+        if inPar.do_fec:
+            llr_tf_use = np.reshape(llr_tf.numpy(), (1, llr_tf.shape[0] * llr_tf.shape[1]), order='C')
+            decoder = mod_dict["decoder"]
+            bit_uncode = decoder(tf.convert_to_tensor(llr_tf_use))
+            bit_uncode = bit_uncode.numpy().T
+        else:
+            bit_uncode = bit_arr
+
+    return bit_arr, bit_uncode
 
 
 def get_ber(data_stream, bit_arr, N_sc_use):
-    err_num = 0
-
-    if False:
-        for idx in range(0, N_sc_use):
-            if (data_stream[idx, 0] != bit_arr[idx]):
-                err_num = err_num + 1
-        ber = 1.0 * err_num / N_sc_use
-
     ber = np.sum(data_stream != bit_arr) / len(data_stream)
-
     return ber
 
+#do_load_file = False
+inPar = init_tx_dict()
+# imitate tranmitted
+(repeated_frame_tx, repeated_frame, frame_len, preamble_len, preamble_core, mod_dict_data, pilot_tx,
+ bite_stream_tx, mod_data, bite_stream_tx_uncode)  \
+        = create_data_frame(inPar)
+# end imitate
 
-#############################################################################
-# Try Sionna
-NUM_BITS_PER_SYMBOL = num_bits_sym
-
-binary_source = sn.utils.BinarySource()
-
-if num_bits_sym > 1:
-    constellation = sn.mapping.Constellation("qam", NUM_BITS_PER_SYMBOL, trainable=True) # The constellation is set to be trainable
-
-    # Mapper and demapper
-    mapper = sn.mapping.Mapper(constellation=constellation)
-    demapper = sn.mapping.Demapper("maxlog", constellation=constellation)
-else:
-    mapper = list()
-    demapper = list()
+#Thr_max = (inPar.N_sc_use * inPar.num_bits_sym) * (inPar.N_sc_use / inPar.N_fft) * inPar.delta_f / 1e3  # kbit/sec
+Thr_max = inPar.N_sc_use * inPar.num_bits_sym * inPar.Ndata / 1e3 # kbit per package
 
 
-# Emulate transmission
-np.random.seed(123)
-tf.random.set_seed(123)
-preamble, preamble_core = create_preamble(N_fft, CP_len, 2)
+if not inPar.dummyRx:
+    # additional params
 
-pilot_tx = list()
-data_tx = list()
-bite_stream_tx = list()
-repeated_frame_tx = []
+    do_load_file = False # should be False
+    do_save = False
 
+    # init Thr
+    alpha_avg = 0.1
+    Thr_dict = dict()
+    for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
+        Thr_dict[name_mimo] = 0.0
 
-for tx_idx in range(Ntx):
-
-    mod_dict_pilot = dict()
-    mod_dict_pilot['num_bit'] = 1
-
-    comb_start = tx_idx
-    comb_step = Ntx
-    pilot, pilot_freq, _ = create_data(N_sc_use, N_fft, CP_len, mod_dict_pilot, False, True, False, comb_start, comb_step)
-
-    pilot_tx.append(pilot_freq)
-
-    mod_dict_data = dict()
-    mod_dict_data['binary_source'] = binary_source
-    mod_dict_data['mapper'] = mapper
-    mod_dict_data['demapper'] = demapper
-    mod_dict_data['num_bit'] = num_bits_sym
-    data, mod_data, bite_stream = create_data(N_sc_use, N_fft, CP_len, mod_dict_data, False, True, True)
-    data_tx.append(data)
-    bite_stream_tx.append(bite_stream)
-
-    guard = np.zeros((guard_length, 1), dtype=np.complex64)
-
-    pilot_rep = np.tile(pilot, reps=(pilot_repeat, 1))
-
-    frame = np.concatenate((preamble, pilot_rep, data, guard))
-
-    repeated_frame = np.tile(frame, reps = (3,1))
-
-    if len(repeated_frame_tx) == 0:
-        repeated_frame_tx = repeated_frame
-    else:
-        repeated_frame_tx = np.hstack((repeated_frame_tx, repeated_frame))
-
-
-FrameSize = repeated_frame_tx.shape[0]
-
-
-
-#guard = np.zeros((guard_length, 1), dtype=np.complex64)
-#frame = np.concatenate((preamble, pilot, data, guard))
-
-#repeated_frame = np.tile(frame, reps=(3, 1))
-
-frame_len = len(frame)
-preamble_len = N_fft // 2
-
-#sdr = adi.Pluto(uri='ip:192.168.1.1')
-#sdr = adi.ad9361(uri='ip:192.168.1.1')
-if not do_load_file:
     sdr = adi.ad9361(uri='ip:192.168.2.2')
-    samp_rate = sample_rate  # must be <=30.72 MHz if both channels are enabled
-    num_samps = len(repeated_frame)  # number of samples per buffer.  Can be different for Rx and Tx
-    rx_lo = int(center_freq)
+    samp_rate = inPar.sample_rate  # must be <=30.72 MHz if both channels are enabled
+    num_samps = len(repeated_frame) * 1  # number of samples per buffer.  Can be different for Rx and Tx
+    rx_lo = int(inPar.center_freq)
     rx_mode = "slow_attack"  # can be "manual" or "slow_attack"
     rx_gain0 = 70
     rx_gain1 = 70
@@ -442,9 +318,31 @@ if not do_load_file:
     sdr.rx_hardwaregain_chan0 = int(rx_gain0)
     sdr.rx_hardwaregain_chan1 = int(rx_gain1)
     sdr.rx_buffer_size = int(num_samps)
+else:
+    # emulate Ntx
+    repeated_frame_tx = repeated_frame_tx.T
+    Nrx_test = 2
+    repeated_frame_tx = np.tile(repeated_frame_tx, (Nrx_test, 1))
+
+    # add AWGN channel for Tx signal
+    Es_tmp = np.linalg.norm(repeated_frame_tx.flatten())**2 / len(repeated_frame_tx.flatten())
+
+    SNR = 3
+    sigma_noise_tmp = Es_tmp * 10**(-SNR/10)
+
+    noise_arr = np.sqrt(sigma_noise_tmp / 2) * ( (np.random.normal(0, 1, repeated_frame_tx.shape)) + 1j * (np.random.normal(0, 1, repeated_frame_tx.shape)) )
+
+    data_rx_dummy = repeated_frame_tx + noise_arr
+    SNR_est = 10.0 * np.log10(np.linalg.norm(repeated_frame_tx.flatten())**2 / np.linalg.norm(noise_arr.flatten())**2)
+    print(f'dummy Tx SNRset={SNR:.2f} SNR={SNR_est:.2f}')
+
+    data = data_rx_dummy
+
+    sdr = []
 
 #### INIT part is finished
 def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
+
     data = np.array(data)
 
     # parse mimo_mode
@@ -467,48 +365,50 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
 
     elif (mimo_mode == 2) or (mimo_mode == 3) or (mimo_mode == 4):
 
-        rx_sig = data
+        rx_sig = data # Ntx x Nsamples
 
     # rx_sig = data
     num_rx, rx_len = rx_sig.shape
 
-    idx_max, corr_value, sigma_arr, SNR_guard = find_edges(rx_sig, frame_len, preamble_len, CP_len, preamble_core, start_idx=0)
-    frame_receive = rx_sig[:, idx_max: idx_max + frame_len]
+    frame_len_use = frame_len
+    idx_max, corr_value, sigma_arr, SNR_guard = find_edges(rx_sig, frame_len_use, preamble_len, inPar.CP_len, preamble_core, start_idx=0)
+    frame_receive = rx_sig[:, idx_max: idx_max + frame_len_use]
 
-    frame_receive = cfo(frame_receive, corr_value, preamble_len) if do_cfo_corr else frame_receive
+    frame_receive = cfo(frame_receive, corr_value, preamble_len) if inPar.do_cfo_corr else frame_receive
 
-    pilot_freq_rep = np.zeros( (pilot_repeat, num_rx, N_fft), dtype=np.complex64 )
+    pilot_freq_rep = np.zeros( (inPar.pilot_repeat, num_rx, inPar.N_fft), dtype=np.complex64 )
 
-    frame_cp_len = N_fft + CP_len
-    start_time = N_fft + CP_len
-    for rep_idx in range(pilot_repeat):
-        pilot_receive = frame_receive[:, start_time + (rep_idx)* frame_cp_len : start_time + (rep_idx)* frame_cp_len + N_fft]
-        pilot_freq = np.fft.fft(pilot_receive, N_fft, axis=1, norm="ortho")
-
+    frame_cp_len = inPar.N_fft + inPar.CP_len
+    start_time = inPar.N_fft + inPar.CP_len
+    for rep_idx in range(inPar.pilot_repeat):
+        pilot_receive = frame_receive[:, start_time + (rep_idx)* frame_cp_len : start_time + (rep_idx)* frame_cp_len + inPar.N_fft]
+        pilot_freq = np.fft.fft(pilot_receive, inPar.N_fft, axis=1, norm="ortho")
         pilot_freq_rep[rep_idx, :, :] = pilot_freq
 
 
-    h_ls_all = np.zeros((iNtx, num_rx, N_sc_use), dtype=np.complex64)
-    rec_sym_pilot_all = np.zeros((pilot_repeat, num_rx, N_sc_use), dtype=np.complex64)
+    h_ls_all = np.zeros((iNtx, num_rx, inPar.N_sc_use), dtype=np.complex64)
+    rec_sym_pilot_all = np.zeros((inPar.pilot_repeat, num_rx, inPar.N_sc_use), dtype=np.complex64)
 
     Ruu = np.zeros((num_rx, num_rx), dtype=np.complex64)
+
+    # CE part
     for tx_idx in range(iNtx):
 
         comb_start = tx_idx
         comb_step = iNtx
 
-        ls_len = int(N_sc_use/comb_step)
+        ls_len = int(inPar.N_sc_use/comb_step)
 
         for rx_idx in range(num_rx):
 
-            h_ls_rep = np.zeros( (pilot_repeat, num_rx, ls_len), dtype=np.complex64 )
-            for rep_idx in range(pilot_repeat):
+            h_ls_rep = np.zeros( (inPar.pilot_repeat, num_rx, ls_len), dtype=np.complex64 )
+            for rep_idx in range(inPar.pilot_repeat):
 
-                rec_sym_pilot = baseband_freq_domian(pilot_freq_rep[rep_idx, rx_idx, :], N_sc_use)
-                rec_sym_pilot_all[rep_idx, rx_idx, :] = rec_sym_pilot[:, 0]
+                rec_sym_pilot = baseband_freq_domian(pilot_freq_rep[rep_idx, rx_idx, :], inPar.N_sc_use)
+                rec_sym_pilot_all[rep_idx, rx_idx, :] = rec_sym_pilot
 
                 # apply CE
-                h_ls = rec_sym_pilot[comb_start::comb_step, 0] / pilot_tx[tx_idx][comb_start::comb_step, 0]
+                h_ls = rec_sym_pilot[comb_start::comb_step] / pilot_tx[tx_idx][comb_start::comb_step, 0]
 
                 h_ls_rep[rep_idx, rx_idx, :] = h_ls
 
@@ -520,17 +420,15 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
                     h_ls = h_ls + h_ls_c
                 h_ls = h_ls / pilot_rep_use
 
-
-
-            h_ls_all[tx_idx, rx_idx, :] = channel_estimation(h_ls, CP_len, N_fft, comb_step, sigma_arr[rx_idx], ce_mode) if do_ce else h_ls
+            h_ls_all[tx_idx, rx_idx, :] = channel_estimation(h_ls, inPar.CP_len, inPar.N_fft, comb_step, sigma_arr[rx_idx], ce_mode) if inPar.do_ce else h_ls
 
         # usamples estimation
-        for rep_idx in range(pilot_repeat):
+        for rep_idx in range(inPar.pilot_repeat):
             u_mx = rec_sym_pilot_all[rep_idx, :, comb_start::comb_step] - h_ls_all[tx_idx, :, comb_start::comb_step] * pilot_tx[tx_idx][comb_start::comb_step, 0]
             Ruu_c = u_mx @ u_mx.conj().T / u_mx.shape[1]
 
 
-        Ruu = Ruu + (Ruu_c / pilot_repeat)
+        Ruu = Ruu + (Ruu_c / inPar.pilot_repeat)
 
 
 
@@ -541,25 +439,47 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
     Ruu_inv = np.linalg.inv(Ruu)
 
     # receive baseband frame
-    rec_data_sym = frame_receive[:, (1 + pilot_repeat) * (N_fft + CP_len): (1 + pilot_repeat) * (N_fft + CP_len) + N_fft]
+    if False:
+        rec_data_sym = frame_receive[:, inPar.N_fft + (inPar.pilot_repeat) * (inPar.N_fft + inPar.CP_len): inPar.N_fft + (inPar.pilot_repeat) * (inPar.N_fft + inPar.CP_len) + (inPar.N_fft + inPar.CP_len) * inPar.Ndata]
+
+        # revome CP for Data
+        # rec_data_sym in Nrx x (Nfft + CP) * Ndata
+        rec_data_sym = rec_data_sym[:, np.newaxis, :]
+        rec_data_sym = np.reshape(rec_data_sym, newshape=(rec_data_sym.shape[0], inPar.N_fft + inPar.CP_len, inPar.Ndata), order='F')
+
+        rec_data_sym = rec_data_sym[:, :inPar.N_fft, :]
+
+        #rec_data_sym = frame_receive[:, 2 * (N_fft + CP_len): 2 * (N_fft + CP_len) + N_fft]
+        # OFDM demodulation
+        rec_data_sym_freq = np.fft.fft(rec_data_sym, inPar.N_fft, axis=1, norm="ortho")
+
+    # rewrite CP removal
+    data_freq_rep = np.zeros((inPar.Ndata, num_rx, inPar.N_fft), dtype=np.complex64)
+    frame_cp_len = inPar.N_fft + inPar.CP_len
+    start_time = inPar.N_fft + (frame_cp_len) * inPar.pilot_repeat + inPar.CP_len
+
+    for rep_idx in range(inPar.Ndata):
+        data_receive = frame_receive[:,
+                        start_time + (rep_idx) * frame_cp_len: start_time + (rep_idx) * frame_cp_len + inPar.N_fft]
+        data_freq = np.fft.fft(data_receive, inPar.N_fft, axis=1, norm="ortho")
+        data_freq_rep[rep_idx, :, :] = data_freq
+
+    rec_data_sym_freq = np.transpose(data_freq_rep, axes=(1, 2, 0))
 
 
-    #rec_data_sym = frame_receive[:, 2 * (N_fft + CP_len): 2 * (N_fft + CP_len) + N_fft]
-    rec_data_sym_freq = np.fft.fft(rec_data_sym, N_fft, axis=1, norm="ortho")
-
-    rec_sym_data_all = np.zeros((num_rx, N_sc_use), dtype=np.complex64)
+    rec_sym_data_all = np.zeros((num_rx, inPar.N_sc_use, inPar.Ndata), dtype=np.complex64)
 
     rho_su = 1.0 # init correlation between SU weights
 
     for rx_idx in range(num_rx):
-        rx_tmp = baseband_freq_domian(rec_data_sym_freq[rx_idx, :], N_sc_use)
-        rec_sym_data_all[rx_idx, :] = rx_tmp[:, 0]
+        rx_tmp = baseband_freq_domian(rec_data_sym_freq[rx_idx, :, :], inPar.N_sc_use)
+        rec_sym_data_all[rx_idx, :, :] = rx_tmp[:, :]
 
     if mimo_mode == 0 or mimo_mode == 1:
+        # outdated modes
         eq_data = rec_sym_data_all[0, :] / h_ls_all[0, :]
-
     else:
-        eq_data = np.zeros( (iNtx, N_sc_use), dtype=np.complex64)
+        eq_data = np.zeros( (iNtx, inPar.N_sc_use, inPar.Ndata), dtype=np.complex64)
         rho_avg = list()
 
         # SU weights correlation
@@ -579,7 +499,7 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
                 h_ls_all[tx_idx, :, :] = W_smmse @ h_ls_all[tx_idx, :, :]
 
 
-        if Ntx > 1:
+        if inPar.Ntx > 1:
             R_corr = V_su.conj().T @ V_su
             rho_su = R_corr[0, 1]
         else:
@@ -591,7 +511,7 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
 
             h_c = h_c.T
 
-            r_c = rec_sym_data_all[:, sc_idx:sc_idx + 1]
+            r_c = rec_sym_data_all[:, sc_idx, :] # Nrx x Ndata
             # MRC
             if mimo_mode == 2:
                 x_c = np.linalg.inv(h_c.conj().T @ h_c) @ h_c.conj().T @ r_c
@@ -618,7 +538,7 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
 
                 x_c = np.linalg.inv(h_c.conj().T @ Ruu_inv @ h_c) @ h_c.conj().T @ Ruu_inv @ r_c
 
-            eq_data[:, sc_idx:sc_idx+1] = x_c
+            eq_data[:, sc_idx, :] = x_c
 
     #rho_avg_plot = np.mean(rho_avg)
     rho_avg_plot = rho_su
@@ -627,88 +547,106 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
     ber_arr = list()
     for tx_idx in range(iNtx):
 
-        if do_sc_fdm:
-            bit_arr = demodulate(T_prec.conj().T @ eq_data[tx_idx, :], N_sc_use, mod_dict_data)
+        if inPar.do_sc_fdm:
+            bit_arr, bit_arr_uncode = demodulate(inPar.T_prec.conj().T @ eq_data[tx_idx, :], inPar.N_sc_use, mod_dict_data)
         else:
-            bit_arr = demodulate(eq_data[tx_idx, :], N_sc_use, mod_dict_data)
+            bit_arr, bit_arr_uncode = demodulate(eq_data[tx_idx, :], inPar.N_sc_use, mod_dict_data)
 
-        ber = get_ber(bite_stream_tx[tx_idx], bit_arr, N_sc_use)
+        # unwrap data to bitstream
+        bit_arr = np.reshape(bit_arr, newshape=(bit_arr.shape[0] * bit_arr.shape[1], 1), order='F') # Nbit_total x 1
 
-        ber_arr.append(ber)
+        ber = get_ber(bite_stream_tx[tx_idx], bit_arr, inPar.N_sc_use)
+
+        if inPar.do_fec:
+            ber_uncode = get_ber(bite_stream_tx_uncode[tx_idx], bit_arr_uncode, inPar.N_sc_use)
+            ber_arr.append(ber_uncode)
+        else:
+            ber_arr.append(ber)
+
 
         #SNR_est = estimate_SNR(pilot_freq, rec_sym_pilot_all, N_sc_use)
 
     return ber_arr, SNR_guard, rho_avg_plot
 
 #### RECEIVER PART start - test reception chain
-if not do_load_file:
-    data = sdr.rx()
+if not inPar.dummyRx:
+    if not do_load_file:
 
-    print(f'SDR reception is OK!!!')
-
-    if do_save:
-        #path_save = f'C:\\dev\\git_tutor\\python_sdr\\tmp.mat'
-        path_save = f'tmp.mat'
-        print(path_save)
+        data = sdr.rx()
         data = np.array(data)
-        scipy.io.savemat(path_save, {'data': data})
 
-    print(data[0].shape)
+
+        print(f'SDR reception is OK!!!')
+
+        if do_save:
+            #path_save = f'C:\\dev\\git_tutor\\python_sdr\\tmp.mat'
+            path_save = f'tmp.mat'
+            print(path_save)
+            data = np.array(data)
+            scipy.io.savemat(path_save, {'data': data})
+
+        print(data[0].shape)
+    else:
+        print(f'Reception from file is OK!!!')
+
+        path_save = f'tmp.mat'
+        mat = scipy.io.loadmat(path_save)
+        data = mat['data']
+        data = np.array(data)
+        # test receiver
 else:
-    print(f'Reception from file is OK!!!')
+    # code for dummy receeption
 
-    path_save = f'tmp.mat'
-    mat = scipy.io.loadmat(path_save)
-    data = mat['data']
-    data = np.array(data)
-
-    # test receiver
+    print('Dummpy Rx mode')
+    #exit(0)
 
 # FOR DEBUG first frame
-if True:
-    #while True:
-        for mimo, rec_name in cfg_test:
+for mimo, rec_name in cfg_test:
 
-            try:
-                pilot_rep_use = int(re.findall('_rep(\d+)', rec_name)[0])
-            except:
-                pilot_rep_use = 1
+    # parse configs
+    try:
+        pilot_rep_use = int(re.findall('_rep(\d+)', rec_name)[0])
+    except:
+        pilot_rep_use = 1
 
-            ber_c, snr_c, rho_avg_plot = receiver_MIMO(data, mimo, Ntx, pilot_rep_use)
+    ber_c, snr_c, rho_avg_plot = receiver_MIMO(data, mimo, inPar.Ntx, pilot_rep_use)
 
-            print(f'mimo={mimo} rec_name={rec_name}, snr_c={snr_c}')
+    print(f'mimo={mimo} rec_name={rec_name}, snr_c={snr_c}')
 
-            for tx_idx in range(Ntx):
-                print(f'Layer={tx_idx} ber={ber_c[tx_idx]}')
+    for tx_idx in range(inPar.Ntx):
+        print(f'Layer={tx_idx} ber={ber_c[tx_idx]}')
 
-            time.sleep(2)
+    time.sleep(0.1)
 
 
 def update(frame1):
 
     ### SDR reception
-    if not do_load_file:
-        data = sdr.rx()
+    if not inPar.dummyRx:
+        if not do_load_file:
+            data = sdr.rx()
 
-        if do_save:
+            if do_save:
+                path_save = f'tmp.mat'
+                print(path_save)
+                data = np.array(data)
+                scipy.io.savemat(path_save, {'data': data})
+                print(data[0].shape)
+
+        else:
             path_save = f'tmp.mat'
-            print(path_save)
+            mat = scipy.io.loadmat(path_save)
+            data = mat['data']
             data = np.array(data)
-            scipy.io.savemat(path_save, {'data': data})
-            print(data[0].shape)
-
     else:
-        path_save = f'tmp.mat'
-        mat = scipy.io.loadmat(path_save)
-        data = mat['data']
-        data = np.array(data)
-
+        print('Dummpy Rx mode')
+        exit(1)
 
     for idx, (mimo, rec_name) in enumerate(cfg_test):
 
-        ber_c, snr_c, rho_avg_plot = receiver_MIMO(data, mimo, Ntx)
+        ber_c, snr_c, rho_avg_plot = receiver_MIMO(data, mimo, inPar.Ntx)
 
-        thr_c =  Thr_max * ( Ntx - np.sum( np.array(ber_c) ))
+        thr_c =  Thr_max * ( inPar.Ntx - np.sum( np.array(ber_c) ))
 
 
 
@@ -750,7 +688,7 @@ def update(frame1):
 def init():
     ax[0].set_xlabel('Time')
     ax[0].set_xlim(0, 2*np.pi)
-    ax[0].set_ylabel(f'BER@QAM{2**NUM_BITS_PER_SYMBOL}')
+    ax[0].set_ylabel(f'BER@QAM{2**inPar.num_bits_sym}')
     ax[0].set_ylim(10 ** (-4), 10 ** (-0))
 
     ax[1].set_xlabel('Time')
@@ -766,7 +704,7 @@ def init():
     ax[3].set_xlabel('Time')
     ax[3].set_ylabel(f'Throughput')
     ax[3].set_xlim(0, 2 * np.pi)
-    ax[3].set_ylim(0.0, 1.2 * Thr_max * Ntx)
+    ax[3].set_ylim(0.0, 1.2 * Thr_max * inPar.Ntx)
 
 
 
