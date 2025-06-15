@@ -157,7 +157,8 @@ def create_data_frame(inPar : SysParUL):
     mod_dict_data['info_total'] = info_total
     mod_dict_data['bits_total'] = bits_total
 
-
+    # mod data tx output
+    mod_data_tx = list() # per Tx , complex array Nsc_avg x Ndatas
 
     for tx_idx in range(inPar.Ntx):
 
@@ -183,6 +184,7 @@ def create_data_frame(inPar : SysParUL):
         data_tx.append(data)
         bite_stream_tx.append(bite_stream)
         bite_stream_tx_uncode.append(bite_stream_uncode)
+        mod_data_tx.append(mod_data)
 
         guard = np.zeros((inPar.guard_length, 1), dtype=np.complex64)
 
@@ -203,7 +205,7 @@ def create_data_frame(inPar : SysParUL):
     frame_len = len(frame)
     preamble_len = inPar.N_fft // 2
 
-    return repeated_frame_tx, repeated_frame, frame_len, preamble_len, preamble_core, mod_dict_data, pilot_tx, bite_stream_tx, mod_data, bite_stream_tx_uncode
+    return repeated_frame_tx, repeated_frame, frame_len, preamble_len, preamble_core, mod_dict_data, pilot_tx, bite_stream_tx, mod_data_tx, bite_stream_tx_uncode
 
 def main():
 

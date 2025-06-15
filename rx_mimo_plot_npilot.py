@@ -26,7 +26,7 @@ import json
 #cfg_test =[(4, 'IRC'), (2, 'MMSE')]
 #cfg_test =[(14, 'IRC_SMMSE'), (4, 'IRC'), (12, 'MMSE_SMMSE'), (2, 'MMSE')]
 #cfg_test =[(102, 'MMSE_SW_rep1'), (2, 'MMSE_rep1')]
-cfg_test =[(2, 'MMSE_rep2'), (2, 'MMSE_rep1')]
+cfg_test =[(2, 'MMSE_rep4'), (2, 'MMSE_rep2'), (2, 'MMSE_rep1')]
 
 
 
@@ -34,32 +34,42 @@ num_cfg = len(cfg_test)
 line_arr = list()
 line_snr_arr = list()
 
-num_subplots = 4
-fig, ax = plt.subplots(num_subplots)
-ax[0].grid() # ber plot
-ax[1].grid() # SNR plot
-ax[2].grid() # correlation plot
-ax[3].grid() # throughput plot
+# set list of metric to plot
+NUM_FRAMES = 2* np.pi # length of plot
+#metrics_to_plot = ['SNR_guard', 'EVM', 'BER']
+metrics_to_plot = ['BER', 'EVM']
 
+num_subplots = len(metrics_to_plot)
+
+fig, ax = plt.subplots(num_subplots)
+
+for p_idx in range(num_subplots):
+    ax[p_idx].grid() # ber plot
+
+
+# define lines on plots per tested CFG
 colors = ['r-', 'g-', 'b-', 'c-', 'm-', 'y-']
 for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
     #line_c, = ax.plot([], [], colors[idx], label=name_mimo)
-    line_c, = ax[0].semilogy([], [], colors[idx], label=name_mimo)
-    line_arr.append(line_c)
+    for p_idx in range(num_subplots):
 
-    line_c, = ax[1].plot([], [], colors[idx], label=name_mimo)
-    line_arr.append(line_c)
+        if metrics_to_plot[p_idx] == 'BER':
+            line_c, = ax[p_idx].semilogy([], [], colors[idx], label=name_mimo)
+        else:
+            line_c, = ax[p_idx].plot([], [], colors[idx], label=name_mimo)
 
-    line_c, = ax[2].plot([], [], colors[idx], label=name_mimo)
-    line_arr.append(line_c)
+        line_arr.append(line_c)
 
-    line_c, = ax[3].plot([], [], colors[idx], label=name_mimo)
-    line_arr.append(line_c)
+# create legend
+for p_idx in range(num_subplots):
+    ax[p_idx].legend()
 
-ax[0].legend()
-ax[1].legend()
-ax[2].legend()
-ax[3].legend()
+
+
+# util functions
+def calc_evm(dat_idl, dat_est):
+    evm_c = 10.0 * np.log10( np.linalg.norm(dat_idl.flatten()))**2 / np.linalg.norm((dat_idl - dat_est).flatten()**2 )
+    return evm_c
 
 
 #############################################################################
@@ -279,7 +289,7 @@ def get_ber(data_stream, bit_arr, N_sc_use):
 inPar = init_tx_dict()
 # imitate tranmitted
 (repeated_frame_tx, repeated_frame, frame_len, preamble_len, preamble_core, mod_dict_data, pilot_tx,
- bite_stream_tx, mod_data, bite_stream_tx_uncode)  \
+ bite_stream_tx, mod_data_tx, bite_stream_tx_uncode)  \
         = create_data_frame(inPar)
 # end imitate
 
@@ -327,7 +337,7 @@ else:
     # add AWGN channel for Tx signal
     Es_tmp = np.linalg.norm(repeated_frame_tx.flatten())**2 / len(repeated_frame_tx.flatten())
 
-    SNR = 3
+    SNR = inPar.SNR_dummy
     sigma_noise_tmp = Es_tmp * 10**(-SNR/10)
 
     noise_arr = np.sqrt(sigma_noise_tmp / 2) * ( (np.random.normal(0, 1, repeated_frame_tx.shape)) + 1j * (np.random.normal(0, 1, repeated_frame_tx.shape)) )
@@ -336,7 +346,7 @@ else:
     SNR_est = 10.0 * np.log10(np.linalg.norm(repeated_frame_tx.flatten())**2 / np.linalg.norm(noise_arr.flatten())**2)
     print(f'dummy Tx SNRset={SNR:.2f} SNR={SNR_est:.2f}')
 
-    data = data_rx_dummy
+    #data = data_rx_dummy
 
     sdr = []
 
@@ -438,26 +448,13 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
     U_t, S_t, v_t = np.linalg.svd(Ruu)
     Ruu_inv = np.linalg.inv(Ruu)
 
-    # receive baseband frame
-    if False:
-        rec_data_sym = frame_receive[:, inPar.N_fft + (inPar.pilot_repeat) * (inPar.N_fft + inPar.CP_len): inPar.N_fft + (inPar.pilot_repeat) * (inPar.N_fft + inPar.CP_len) + (inPar.N_fft + inPar.CP_len) * inPar.Ndata]
-
-        # revome CP for Data
-        # rec_data_sym in Nrx x (Nfft + CP) * Ndata
-        rec_data_sym = rec_data_sym[:, np.newaxis, :]
-        rec_data_sym = np.reshape(rec_data_sym, newshape=(rec_data_sym.shape[0], inPar.N_fft + inPar.CP_len, inPar.Ndata), order='F')
-
-        rec_data_sym = rec_data_sym[:, :inPar.N_fft, :]
-
-        #rec_data_sym = frame_receive[:, 2 * (N_fft + CP_len): 2 * (N_fft + CP_len) + N_fft]
-        # OFDM demodulation
-        rec_data_sym_freq = np.fft.fft(rec_data_sym, inPar.N_fft, axis=1, norm="ortho")
 
     # rewrite CP removal
     data_freq_rep = np.zeros((inPar.Ndata, num_rx, inPar.N_fft), dtype=np.complex64)
     frame_cp_len = inPar.N_fft + inPar.CP_len
     start_time = inPar.N_fft + (frame_cp_len) * inPar.pilot_repeat + inPar.CP_len
 
+    # remove CP per TTi
     for rep_idx in range(inPar.Ndata):
         data_receive = frame_receive[:,
                         start_time + (rep_idx) * frame_cp_len: start_time + (rep_idx) * frame_cp_len + inPar.N_fft]
@@ -540,10 +537,17 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
 
             eq_data[:, sc_idx, :] = x_c
 
+    # equalization points are ready
+    # calculate EVM
+    evm_arr = np.zeros((iNtx,), dtype=np.float32)
+    for tx_idx in range(iNtx):
+        evm_arr[tx_idx] = calc_evm(mod_data_tx[tx_idx], eq_data)
+
     #rho_avg_plot = np.mean(rho_avg)
     rho_avg_plot = rho_su
     #rho_avg_plot = np.max(rho_avg)
 
+    # calculate BER/FER
     ber_arr = list()
     for tx_idx in range(iNtx):
 
@@ -566,7 +570,7 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
 
         #SNR_est = estimate_SNR(pilot_freq, rec_sym_pilot_all, N_sc_use)
 
-    return ber_arr, SNR_guard, rho_avg_plot
+    return ber_arr, SNR_guard, rho_avg_plot, evm_arr
 
 #### RECEIVER PART start - test reception chain
 if not inPar.dummyRx:
@@ -596,7 +600,8 @@ if not inPar.dummyRx:
         # test receiver
 else:
     # code for dummy receeption
-
+    # input array data set globally
+    data = data_rx_dummy
     print('Dummpy Rx mode')
     #exit(0)
 
@@ -609,9 +614,9 @@ for mimo, rec_name in cfg_test:
     except:
         pilot_rep_use = 1
 
-    ber_c, snr_c, rho_avg_plot = receiver_MIMO(data, mimo, inPar.Ntx, pilot_rep_use)
+    ber_c, snr_c, rho_avg_plot, evm_rx = receiver_MIMO(data, mimo, inPar.Ntx, pilot_rep_use)
 
-    print(f'mimo={mimo} rec_name={rec_name}, snr_c={snr_c}')
+    print(f'mimo={mimo} rec_name={rec_name}, snr_c={snr_c}, evm={np.mean(evm_rx)}')
 
     for tx_idx in range(inPar.Ntx):
         print(f'Layer={tx_idx} ber={ber_c[tx_idx]}')
@@ -639,79 +644,116 @@ def update(frame1):
             data = mat['data']
             data = np.array(data)
     else:
-        print('Dummpy Rx mode')
-        exit(1)
+        #print('Dummpy Rx mode')
+        #exit(1)
+        data = data_rx_dummy
+        pass
 
     for idx, (mimo, rec_name) in enumerate(cfg_test):
 
-        ber_c, snr_c, rho_avg_plot = receiver_MIMO(data, mimo, inPar.Ntx)
+        # parse configs
+        try:
+            pilot_rep_use = int(re.findall('_rep(\d+)', rec_name)[0])
+        except:
+            pilot_rep_use = 1
+
+
+        ber_c, snr_c, rho_avg_plot, evm_arr = receiver_MIMO(data, mimo, inPar.Ntx, pilot_rep_use)
 
         thr_c =  Thr_max * ( inPar.Ntx - np.sum( np.array(ber_c) ))
 
+        for p_idx in range(num_subplots):
 
+            x1, y1 = line_arr[num_subplots * idx + p_idx].get_data()
+            x1 = np.append(x1, frame1)
 
-        x1, y1 = line_arr[num_subplots * idx].get_data()
-        #x1, y1 = line_c.get_data()
+            if metrics_to_plot[p_idx] == 'SNR_guard':
+                y1 = np.append(y1, snr_c)
+            elif metrics_to_plot[p_idx] == 'EVM':
+                evm_plot = np.mean(evm_arr)
+                if evm_plot > 3.5:
+                    evm_plot = 3.5
+                y1 = np.append(y1, evm_plot)
+            elif metrics_to_plot[p_idx] == 'BER':
+                y1 = np.append(y1, np.mean(ber_c))
 
-        x1 = np.append(x1, frame1)
-        y1 = np.append(y1, np.mean(ber_c))
-        line_arr[num_subplots  * idx].set_data(x1, y1)
+            line_arr[num_subplots  * idx + p_idx].set_data(x1, y1)
 
-        x1, y1 = line_arr[num_subplots * idx + 1].get_data()
-        # x1, y1 = line_c.get_data()
-
-        x1 = np.append(x1, frame1)
-        y1 = np.append(y1, snr_c)
-        line_arr[num_subplots * idx + 1].set_data(x1, y1)
-
-        x1, y1 = line_arr[num_subplots * idx + 2].get_data()
-        x1 = np.append(x1, frame1)
-        y1 = np.append(y1, rho_avg_plot)
-        line_arr[num_subplots * idx + 2].set_data(x1, y1)
-
-        # plot throughput
-        x1, y1 = line_arr[num_subplots * idx + 3].get_data()
-        x1 = np.append(x1, frame1)
-
-        if len(x1) == 0:
-            Thr_dict[rec_name] = thr_c
-        else:
-            Thr_dict[rec_name] = thr_c * alpha_avg + (1.0 - alpha_avg) * Thr_dict[rec_name]
-
-        y1 = np.append(y1, Thr_dict[rec_name])
-        line_arr[num_subplots * idx + 3].set_data(x1, y1)
+        # x1, y1 = line_arr[num_subplots * idx + 1].get_data()
+        # # x1, y1 = line_c.get_data()
+        #
+        # x1 = np.append(x1, frame1)
+        # y1 = np.append(y1, snr_c)
+        # line_arr[num_subplots * idx + 1].set_data(x1, y1)
+        #
+        # x1, y1 = line_arr[num_subplots * idx + 2].get_data()
+        # x1 = np.append(x1, frame1)
+        # y1 = np.append(y1, rho_avg_plot)
+        # line_arr[num_subplots * idx + 2].set_data(x1, y1)
+        #
+        # # plot throughput
+        # x1, y1 = line_arr[num_subplots * idx + 3].get_data()
+        # x1 = np.append(x1, frame1)
+        #
+        # if len(x1) == 0:
+        #     Thr_dict[rec_name] = thr_c
+        # else:
+        #     Thr_dict[rec_name] = thr_c * alpha_avg + (1.0 - alpha_avg) * Thr_dict[rec_name]
+        #
+        # y1 = np.append(y1, Thr_dict[rec_name])
+        # line_arr[num_subplots * idx + 3].set_data(x1, y1)
 
 
     return (*line_arr,)
 
 
+# init plots
 def init():
-    ax[0].set_xlabel('Time')
-    ax[0].set_xlim(0, 2*np.pi)
-    ax[0].set_ylabel(f'BER@QAM{2**inPar.num_bits_sym}')
-    ax[0].set_ylim(10 ** (-4), 10 ** (-0))
+    #metrics_to_plot = ['SNR_guard', 'EVM', 'BER']
+    for p_idx in range(num_subplots):
 
-    ax[1].set_xlabel('Time')
-    ax[1].set_ylabel(f'SNRguard')
-    ax[1].set_xlim(0, 2 * np.pi)
-    ax[1].set_ylim(0, 45)
+        if metrics_to_plot[p_idx] == "SNR_guard":
+            ax[p_idx].set_xlabel('Time')
+            ax[p_idx].set_ylabel(f'SNRguard')
+            ax[p_idx].set_xlim(0, NUM_FRAMES)
+            ax[p_idx].set_ylim(0, 40)
+        elif metrics_to_plot[p_idx] == "EVM":
+            ax[p_idx].set_xlabel('Time')
+            ax[p_idx].set_ylabel(f'EVM')
+            ax[p_idx].set_xlim(0, NUM_FRAMES)
+            ax[p_idx].set_ylim(0, 4.0)
+        elif metrics_to_plot[p_idx] == "BER":
+            ax[p_idx].set_xlabel('Time')
+            ax[p_idx].set_ylabel(f'BER@QAM{2**inPar.num_bits_sym}')
+            ax[p_idx].set_xlim(0, NUM_FRAMES)
+            ax[p_idx].set_ylim(10 ** (-2), 10 ** (-0))
 
-    ax[2].set_xlabel('Time')
-    ax[2].set_ylabel(f'SU correlation')
-    ax[2].set_xlim(0, 2 * np.pi)
-    ax[2].set_ylim(0.0, 1.0)
-
-    ax[3].set_xlabel('Time')
-    ax[3].set_ylabel(f'Throughput')
-    ax[3].set_xlim(0, 2 * np.pi)
-    ax[3].set_ylim(0.0, 1.2 * Thr_max * inPar.Ntx)
+    # ax[0].set_xlabel('Time')
+    # ax[0].set_xlim(0, 2*np.pi)
+    # ax[0].set_ylabel(f'BER@QAM{2**inPar.num_bits_sym}')
+    # ax[0].set_ylim(10 ** (-4), 10 ** (-0))
+    #
+    # ax[1].set_xlabel('Time')
+    # ax[1].set_ylabel(f'SNRguard')
+    # ax[1].set_xlim(0, 2 * np.pi)
+    # ax[1].set_ylim(0, 45)
+    #
+    # ax[2].set_xlabel('Time')
+    # ax[2].set_ylabel(f'SU correlation')
+    # ax[2].set_xlim(0, 2 * np.pi)
+    # ax[2].set_ylim(0.0, 1.0)
+    #
+    # ax[3].set_xlabel('Time')
+    # ax[3].set_ylabel(f'Throughput')
+    # ax[3].set_xlim(0, 2 * np.pi)
+    # ax[3].set_ylim(0.0, 1.2 * Thr_max * inPar.Ntx)
 
 
 
     return (*line_arr,)
 
 def main():
-    ani = FuncAnimation(fig, update, frames=np.linspace(0, 2*np.pi, 1024), init_func=init, blit=True)
+    ani = FuncAnimation(fig, update, frames=np.linspace(0, NUM_FRAMES, 1024), init_func=init, blit=True)
     plt.show()
 
 if __name__ == "__main__":

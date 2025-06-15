@@ -17,8 +17,10 @@ class SysParUL:
         self.do_fec = inPar_dict["do_fec"]
         self.CR = inPar_dict["CR"]
 
+
         self.dummyTx = inPar_dict["dummyTx"]
         self.dummyRx = inPar_dict["dummyRx"]
+        self.SNR_dummy = inPar_dict["SNR_dummy"] # SNR for dummy Rx
 
 
         self.Ndata = inPar_dict["Ndata"]
