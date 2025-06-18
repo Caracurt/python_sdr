@@ -165,6 +165,9 @@ def find_edges(rx_sig, frame_len, preamble_len, CP_len, preamble_core, start_idx
 
 def cfo(frame_receive, corr_value, preamble_len):
     angle_cfo = np.angle(corr_value) / preamble_len
+
+    print(f'CFOest={angle_cfo} CFO_near_idl_2antsdr=-0.0038')
+
     cfo_comp_sig = np.exp(1j * (-1.0*angle_cfo * np.arange(0, frame_len)))
     frame_receive = frame_receive * cfo_comp_sig
     return frame_receive
@@ -776,6 +779,8 @@ def update(frame1):
 
 
         ber_c, snr_c, rho_avg_plot, evm_arr = receiver_MIMO(data, mimo, inPar.Ntx, pilot_rep_use)
+
+        print(f'case={rec_name} ber_c={np.mean(np.array(ber_c))} guardSNR={snr_c}')
 
         thr_c =  Thr_max * ( inPar.Ntx - np.sum( np.array(ber_c) ))
 
