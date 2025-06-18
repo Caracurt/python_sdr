@@ -35,7 +35,11 @@ line_arr = list()
 line_snr_arr = list()
 
 # set list of metric to plot
-NUM_FRAMES = 2* np.pi # length of plot
+#NUM_FRAMES = 2* np.pi # length of plot
+NUM_FRAMES = 1024
+cfo_glob_dummy = 0.001
+#cfo_glob_dummy = 0.000
+
 #metrics_to_plot = ['SNR_guard', 'EVM', 'BER']
 metrics_to_plot = ['BER', 'EVM']
 
@@ -68,7 +72,7 @@ for p_idx in range(num_subplots):
 
 # util functions
 def calc_evm(dat_idl, dat_est):
-    evm_c = 10.0 * np.log10( np.linalg.norm(dat_idl.flatten()))**2 / np.linalg.norm((dat_idl - dat_est).flatten()**2 )
+    evm_c = 10.0 * np.log10( np.mean( np.abs(dat_idl.flatten())**2 )  / np.mean( np.abs(dat_idl.flatten() - dat_est.flatten())**2 )  )
     return evm_c
 
 
@@ -176,6 +180,15 @@ def baseband_freq_domian(pilot_freq, N_sc_use):
         rec_sym_pilot = np.zeros((N_sc_use, pilot_freq.shape[1]), dtype=np.complex64)
         rec_sym_pilot[int(N_sc_use / 2):, :] = pilot_freq[0 + inPar.dc_offset:int(N_sc_use / 2) + inPar.dc_offset, :]
         rec_sym_pilot[0:int(N_sc_use / 2), :] = pilot_freq[-int(N_sc_use / 2):, :]
+
+        #noise_arr = pilot_freq[int(N_sc_use / 2) + inPar.dc_offset : -int(N_sc_use / 2)]
+
+        #sigma_noise = np.mean(np.abs(noise_arr.flatten()) ** 2)
+        #signal_power = np.mean(np.abs(rec_sym_pilot.flatten()) ** 2)
+
+        #SNR_bb = 10.0 * np.log10(signal_power / sigma_noise)
+
+
 
     return rec_sym_pilot
 
@@ -296,18 +309,30 @@ inPar = init_tx_dict()
 #Thr_max = (inPar.N_sc_use * inPar.num_bits_sym) * (inPar.N_sc_use / inPar.N_fft) * inPar.delta_f / 1e3  # kbit/sec
 Thr_max = inPar.N_sc_use * inPar.num_bits_sym * inPar.Ndata / 1e3 # kbit per package
 
+# init Thr
+alpha_avg = 0.1
+Thr_dict = dict()
+EVM_dict = dict()
+BER_dict = dict()
+
+Thr_dict_list = dict()
+EVM_dict_list = dict()
+BER_dict_list = dict()
+
+for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
+    Thr_dict[name_mimo] = 0.0
+    EVM_dict[name_mimo] = 0.0
+    BER_dict[name_mimo] = 0.0
+
+    # init lists
+    Thr_dict_list[name_mimo] = list()
+    EVM_dict_list[name_mimo] = list()
+    BER_dict_list[name_mimo] = list()
 
 if not inPar.dummyRx:
     # additional params
-
     do_load_file = False # should be False
     do_save = False
-
-    # init Thr
-    alpha_avg = 0.1
-    Thr_dict = dict()
-    for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
-        Thr_dict[name_mimo] = 0.0
 
     sdr = adi.ad9361(uri='ip:192.168.2.2')
     samp_rate = inPar.sample_rate  # must be <=30.72 MHz if both channels are enabled
@@ -343,6 +368,19 @@ else:
     noise_arr = np.sqrt(sigma_noise_tmp / 2) * ( (np.random.normal(0, 1, repeated_frame_tx.shape)) + 1j * (np.random.normal(0, 1, repeated_frame_tx.shape)) )
 
     data_rx_dummy = repeated_frame_tx + noise_arr
+
+    # add dummpy CFO
+    cfo_set = cfo_glob_dummy
+
+    # random phase for both channels
+    a_amp = np.random.rand(repeated_frame_tx.shape[0], 1) + 1j * np.random.rand(repeated_frame_tx.shape[0], 1)
+    a_phase = a_amp / np.abs(a_amp)  # pure phase shift
+
+    cfo_arr = a_phase * np.exp(1j * np.arange(0, repeated_frame_tx.shape[1], 1) * cfo_set)
+
+    data_rx_dummy = data_rx_dummy * cfo_arr
+
+
     SNR_est = 10.0 * np.log10(np.linalg.norm(repeated_frame_tx.flatten())**2 / np.linalg.norm(noise_arr.flatten())**2)
     print(f'dummy Tx SNRset={SNR:.2f} SNR={SNR_est:.2f}')
 
@@ -389,9 +427,32 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
     pilot_freq_rep = np.zeros( (inPar.pilot_repeat, num_rx, inPar.N_fft), dtype=np.complex64 )
 
     frame_cp_len = inPar.N_fft + inPar.CP_len
-    start_time = inPar.N_fft + inPar.CP_len
+    start_time = 2 * preamble_len + inPar.CP_len
+
+    cfo_cp = 0 # CFO correction using CP # should be zero
     for rep_idx in range(inPar.pilot_repeat):
         pilot_receive = frame_receive[:, start_time + (rep_idx)* frame_cp_len : start_time + (rep_idx)* frame_cp_len + inPar.N_fft]
+
+
+        # try CFO correction based on CP
+        if cfo_cp:
+            sig_cp_start = frame_receive[:, start_time + (rep_idx)* frame_cp_len - inPar.CP_len : start_time + (rep_idx)* frame_cp_len]
+            sig_cp_end = pilot_receive[:, -inPar.CP_len:]
+
+            conf_len = int(inPar.CP_len / 2)
+            sig_cp_start_conf = sig_cp_start[:, -conf_len:]
+            sig_cp_end_conf = sig_cp_end[:, -conf_len:]
+
+            corr_tmp = sig_cp_start_conf @ sig_cp_end_conf.conj().T
+            corr_avg = np.mean(np.diag(corr_tmp))
+            angle_cfo_delta = np.angle(corr_avg)
+
+            angle_cfo = angle_cfo_delta / inPar.N_fft
+            cfo_comp_sig = np.exp(1j * ( angle_cfo * np.arange(0, inPar.N_fft)))
+
+            pilot_receive = pilot_receive * cfo_comp_sig
+            # end CFO processing
+
         pilot_freq = np.fft.fft(pilot_receive, inPar.N_fft, axis=1, norm="ortho")
         pilot_freq_rep[rep_idx, :, :] = pilot_freq
 
@@ -452,12 +513,36 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
     # rewrite CP removal
     data_freq_rep = np.zeros((inPar.Ndata, num_rx, inPar.N_fft), dtype=np.complex64)
     frame_cp_len = inPar.N_fft + inPar.CP_len
-    start_time = inPar.N_fft + (frame_cp_len) * inPar.pilot_repeat + inPar.CP_len
+    start_time = 2 * preamble_len + (frame_cp_len) * inPar.pilot_repeat + inPar.CP_len
 
     # remove CP per TTi
     for rep_idx in range(inPar.Ndata):
         data_receive = frame_receive[:,
                         start_time + (rep_idx) * frame_cp_len: start_time + (rep_idx) * frame_cp_len + inPar.N_fft]
+
+        # try CFO correction based on CP
+        if cfo_cp:
+            sig_cp_start = frame_receive[:,
+                           start_time + (rep_idx) * frame_cp_len - inPar.CP_len: start_time + (rep_idx) * frame_cp_len]
+            sig_cp_end = data_receive[:, -inPar.CP_len:]
+
+            conf_len = int(inPar.CP_len / 2)
+            sig_cp_start_conf = sig_cp_start[:, -conf_len:]
+            sig_cp_end_conf = sig_cp_end[:, -conf_len:]
+
+            corr_tmp = sig_cp_start_conf @ sig_cp_end_conf.conj().T
+            corr_avg = np.mean(np.diag(corr_tmp))
+            angle_cfo_delta = np.angle(corr_avg)
+
+            angle_cfo = angle_cfo_delta / inPar.N_fft
+            cfo_comp_sig = np.exp(1j * (angle_cfo * np.arange(0, inPar.N_fft)))
+
+            data_receive = data_receive * cfo_comp_sig
+            # end CFO processing
+
+
+
+
         data_freq = np.fft.fft(data_receive, inPar.N_fft, axis=1, norm="ortho")
         data_freq_rep[rep_idx, :, :] = data_freq
 
@@ -539,6 +624,16 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
 
     # equalization points are ready
     # calculate EVM
+
+    #a = mod_data_tx[0]
+    #b = eq_data[0, :, :]
+    #c = 10.0 * np.log10(1.0 / np.abs(a - b) ** 2)
+    #print(f'EVMsym={np.mean(c, axis=0)}')
+
+    if False:
+        plt.imshow(np.abs(c))
+        plt.show()
+
     evm_arr = np.zeros((iNtx,), dtype=np.float32)
     for tx_idx in range(iNtx):
         evm_arr[tx_idx] = calc_evm(mod_data_tx[tx_idx], eq_data)
@@ -621,7 +716,7 @@ for mimo, rec_name in cfg_test:
     for tx_idx in range(inPar.Ntx):
         print(f'Layer={tx_idx} ber={ber_c[tx_idx]}')
 
-    time.sleep(0.1)
+    time.sleep(0.01)
 
 
 def update(frame1):
@@ -646,6 +741,28 @@ def update(frame1):
     else:
         #print('Dummpy Rx mode')
         #exit(1)
+        #data = data_rx_dummy
+        noise_arr = np.sqrt(sigma_noise_tmp / 2) * ((np.random.normal(0, 1, repeated_frame_tx.shape)) + 1j * (
+            np.random.normal(0, 1, repeated_frame_tx.shape)))
+
+        data_rx_dummy = repeated_frame_tx + noise_arr
+        SNR_est = 10.0 * np.log10(
+            np.linalg.norm(repeated_frame_tx.flatten()) ** 2 / np.linalg.norm(noise_arr.flatten()) ** 2)
+        #print(f'dummy Tx SNRset={SNR:.2f} SNR={SNR_est:.2f}')
+
+        # add dummpy CFO
+        cfo_set = cfo_glob_dummy
+
+        # random phase for both channels
+        a_amp = np.random.rand(repeated_frame_tx.shape[0], 1) + 1j * np.random.rand(repeated_frame_tx.shape[0], 1)
+        a_phase = a_amp / np.abs(a_amp) # pure phase shift
+
+        cfo_arr = a_phase * np.exp( 1j* np.arange(0, repeated_frame_tx.shape[1], 1) * cfo_set)
+
+        data_rx_dummy = data_rx_dummy * cfo_arr
+
+
+
         data = data_rx_dummy
         pass
 
@@ -671,11 +788,36 @@ def update(frame1):
                 y1 = np.append(y1, snr_c)
             elif metrics_to_plot[p_idx] == 'EVM':
                 evm_plot = np.mean(evm_arr)
-                if evm_plot > 3.5:
-                    evm_plot = 3.5
-                y1 = np.append(y1, evm_plot)
+                evm_thr = 7.0
+                if evm_plot > evm_thr:
+                    evm_plot = evm_thr
+                #y1 = np.append(y1, evm_plot)
+                # apply alpha filter
+
+                EVM_dict_list[rec_name].append(evm_plot)
+
+                if len(x1) == 1:
+                    EVM_dict[rec_name] = evm_plot
+                else:
+                    EVM_dict[rec_name] = evm_plot * alpha_avg + (1.0 - alpha_avg) * EVM_dict[rec_name]
+
+                #y1 = np.append(y1, EVM_dict[rec_name])
+                y1 = np.append(y1, np.mean(EVM_dict_list[rec_name]))
+
+
             elif metrics_to_plot[p_idx] == 'BER':
-                y1 = np.append(y1, np.mean(ber_c))
+
+                #y1 = np.append(y1, np.mean(ber_c))
+                ber_plot = np.mean(ber_c)
+
+                BER_dict_list[rec_name].append(ber_plot)
+                if len(x1) == 1:
+                    BER_dict[rec_name] = ber_plot
+                else:
+                    BER_dict[rec_name] = ber_plot * alpha_avg + (1.0 - alpha_avg) * BER_dict[rec_name]
+
+                #y1 = np.append(y1, BER_dict[rec_name])
+                y1 = np.append(y1, np.mean(BER_dict_list[rec_name]))
 
             line_arr[num_subplots  * idx + p_idx].set_data(x1, y1)
 
@@ -707,6 +849,8 @@ def update(frame1):
     return (*line_arr,)
 
 
+# comment for pratice keyboard
+
 # init plots
 def init():
     #metrics_to_plot = ['SNR_guard', 'EVM', 'BER']
@@ -721,7 +865,7 @@ def init():
             ax[p_idx].set_xlabel('Time')
             ax[p_idx].set_ylabel(f'EVM')
             ax[p_idx].set_xlim(0, NUM_FRAMES)
-            ax[p_idx].set_ylim(0, 4.0)
+            ax[p_idx].set_ylim(-5, 9.0)
         elif metrics_to_plot[p_idx] == "BER":
             ax[p_idx].set_xlabel('Time')
             ax[p_idx].set_ylabel(f'BER@QAM{2**inPar.num_bits_sym}')
@@ -753,7 +897,7 @@ def init():
     return (*line_arr,)
 
 def main():
-    ani = FuncAnimation(fig, update, frames=np.linspace(0, NUM_FRAMES, 1024), init_func=init, blit=True)
+    ani = FuncAnimation(fig, update, frames=np.linspace(0, NUM_FRAMES, NUM_FRAMES), init_func=init, blit=True)
     plt.show()
 
 if __name__ == "__main__":

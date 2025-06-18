@@ -16,6 +16,7 @@ class SysParUL:
         self.do_sc_fdm = inPar_dict["do_sc_fdm"]
         self.do_fec = inPar_dict["do_fec"]
         self.CR = inPar_dict["CR"]
+        self.pream_n_fact = inPar_dict["pream_n_fact"]
 
 
         self.dummyTx = inPar_dict["dummyTx"]

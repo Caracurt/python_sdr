@@ -8,13 +8,14 @@
   "frac_guard" : 0.5,
   "do_cfo_corr" : 1,
   "do_ce" : 1,
+  "pream_n_fact" : 4,
   "dc_offset" : 0,
   "pilot_repeat" : 4,
   "do_sc_fdm" : 1,
   "Ndata" : 8,
-  "do_fec": 0,
+  "do_fec": 1,
   "CR" : 0.25,
   "dummyTx": 0,
   "dummyRx" : 0,
-  "SNR_dummy" : 7.0
+  "SNR_dummy" : -3.0
 }

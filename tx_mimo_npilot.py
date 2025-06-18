@@ -21,11 +21,20 @@ def init_tx_dict():
     return inPar
 
 
-def create_preamble(N_fft, CP_len, N_repeat = 2):
-    preamble = 1 - 2 * np.random.randint(0, 2, size=(int(N_fft/2), 1))
+def create_preamble(N_fft, CP_len, N_repeat = 2, inPar : SysParUL = None):
+
+    if inPar != None:
+        n_factor = inPar.pream_n_fact # increase length of preambule
+    else:
+        n_factor = 1
+
+    preamble = 1 - 2 * np.random.randint(0, 2, size=(int(N_fft/2) * n_factor, 1))
     preamble = np.complex64(preamble)
     preamble_full = np.tile(preamble, (N_repeat, 1))
-    preamble_full_cp = np.concatenate((preamble_full[-CP_len:], preamble_full))
+
+    #preamble_full_cp = np.concatenate((preamble_full[-CP_len:], preamble_full))
+    preamble_full_cp = np.concatenate((preamble_full[-CP_len:] * 1.0, preamble_full)) # preambule without CP
+
     return preamble_full_cp, preamble
 
 def create_data(N_sc, N_fft, CP_len, mod_dict_data, do_sc_fdm, T_prec, inPar : SysParUL, dc_offset = False, return_freq_data = False, return_data = False, comb_start=0, comb_step=1):
@@ -111,7 +120,7 @@ def create_data_frame(inPar : SysParUL):
     tf.random.set_seed(123)
 
     # preambule is the same for both channels
-    preamble, preamble_core = create_preamble(inPar.N_fft, inPar.CP_len, 2)
+    preamble, preamble_core = create_preamble(inPar.N_fft, inPar.CP_len, 2, inPar)
 
     binary_source = sn.utils.BinarySource()
 
@@ -203,7 +212,8 @@ def create_data_frame(inPar : SysParUL):
             repeated_frame_tx = np.hstack((repeated_frame_tx, repeated_frame))
 
     frame_len = len(frame)
-    preamble_len = inPar.N_fft // 2
+    #preamble_len = inPar.N_fft // 2
+    preamble_len = len(preamble_core)
 
     return repeated_frame_tx, repeated_frame, frame_len, preamble_len, preamble_core, mod_dict_data, pilot_tx, bite_stream_tx, mod_data_tx, bite_stream_tx_uncode
 
