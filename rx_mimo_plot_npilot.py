@@ -761,10 +761,7 @@ def update(frame1):
         a_phase = a_amp / np.abs(a_amp) # pure phase shift
 
         cfo_arr = a_phase * np.exp( 1j* np.arange(0, repeated_frame_tx.shape[1], 1) * cfo_set)
-
         data_rx_dummy = data_rx_dummy * cfo_arr
-
-
 
         data = data_rx_dummy
         pass
