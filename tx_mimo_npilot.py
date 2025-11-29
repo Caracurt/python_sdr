@@ -259,7 +259,8 @@ def main():
             sdr.tx_hardwaregain_chan0 = int(tx_gain0)
 
             sdr.tx_buffer_size = FrameSize
-            sdr.tx(repeated_frame[:, 0] * 10024.0)
+            #sdr.tx(repeated_frame[:, 0] * 10024.0)
+            sdr.tx(repeated_frame[:, 0] * 2**(16))
         else:
             # adi setup
             sdr = adi.ad9363(uri='ip:192.168.1.1')

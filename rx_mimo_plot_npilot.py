@@ -26,7 +26,8 @@ import json
 #cfg_test =[(4, 'IRC'), (2, 'MMSE')]
 #cfg_test =[(14, 'IRC_SMMSE'), (4, 'IRC'), (12, 'MMSE_SMMSE'), (2, 'MMSE')]
 #cfg_test =[(102, 'MMSE_SW_rep1'), (2, 'MMSE_rep1')]
-cfg_test =[(2, 'MMSE_rep4'), (2, 'MMSE_rep2'), (2, 'MMSE_rep1')]
+#cfg_test =[(2, 'MMSE_rep4'), (2, 'MMSE_rep2'), (2, 'MMSE_rep1')]
+cfg_test =[(2, 'MMSE_rep4')]
 
 
 
@@ -392,14 +393,18 @@ else:
     sdr = []
 
 #### INIT part is finished
-def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
+def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse_mode=None):
 
     data = np.array(data)
 
     # parse mimo_mode
     mimo_mode = mimo_mode_in % 10 # extract MIMO detection
-    smmse_mode = int(mimo_mode_in / 10) % 10 # extract SMME mode
-    ce_mode = int(mimo_mode_in / 100) % 10 # CE mode
+    # SMMSE mode: use provided parameter, or extract from mimo_mode_in for backward compatibility
+    if smmse_mode is None:
+        smmse_mode = int(mimo_mode_in / 10) % 10 # extract SMME mode
+    # CE mode: use provided parameter, or extract from mimo_mode_in for backward compatibility
+    if ce_mode is None:
+        ce_mode = int(mimo_mode_in / 100) % 10 # CE mode
 
     if mimo_mode == 0:
         rx_sig = np.zeros((1, data.shape[1]), dtype=np.complex64)
@@ -562,7 +567,14 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
 
     if mimo_mode == 0 or mimo_mode == 1:
         # outdated modes
-        eq_data = rec_sym_data_all[0, :] / h_ls_all[0, :]
+        rec_data_perm = np.transpose(rec_sym_data_all, axes=(2, 0, 1))
+        h_ls_one = h_ls_all[0, :, :]
+        #eq_data = rec_sym_data_all[0, :] / h_ls_all[0, 0, :]
+
+        eq_data = rec_data_perm / h_ls_all
+        eq_data = np.transpose(eq_data, axes=(1, 2, 0))
+
+
     else:
         eq_data = np.zeros( (iNtx, inPar.N_sc_use, inPar.Ndata), dtype=np.complex64)
         rho_avg = list()
@@ -599,7 +611,10 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1):
             r_c = rec_sym_data_all[:, sc_idx, :] # Nrx x Ndata
             # MRC
             if mimo_mode == 2:
-                x_c = np.linalg.inv(h_c.conj().T @ h_c) @ h_c.conj().T @ r_c
+                try:
+                    x_c = np.linalg.inv(h_c.conj().T @ h_c) @ h_c.conj().T @ r_c
+                except:
+                    x_c = h_c.conj().T @ r_c
             elif mimo_mode == 3:
                 # W-MRC // IRC
 
