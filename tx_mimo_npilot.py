@@ -293,7 +293,14 @@ def main():
 
             sdr.tx_buffer_size = FrameSize
 
-            sdr.tx(repeated_frame_tx * 10024.0)
+            tmp_arr = np.array(repeated_frame_tx)
+            tmp_arr1 = tmp_arr.flatten()
+            max_el = max(np.abs(np.hstack( (np.real(tmp_arr1), np.imag(tmp_arr1)))) )
+
+            scale = (1.0 / max_el) * 2**(15)
+
+            #sdr.tx(repeated_frame_tx * 10024.0)
+            sdr.tx(repeated_frame_tx * scale)
 
     # data = np.arange(1, 10, 3)
     # Send
