@@ -29,7 +29,8 @@ Ntx = 1
 
 # path to dataset
 #DUMP_FILE = Path("dump_last_10_frames_2GHZ_40m_chair.pkl")
-DUMP_FILE_list = [Path("dump_last_10_frames_p1.pkl"), Path("dump_last_10_frames_p2.pkl")]
+#DUMP_FILE_list = [Path("dump_last_10_frames_p1.pkl"), Path("dump_last_10_frames_p2.pkl")]
+DUMP_FILE_list = [Path("dump_last_10_frames_pp1.pkl"), Path("dump_last_10_frames_pp2.pkl")]
 
 preloaded_frames = list()
 for DUMP_FILE in DUMP_FILE_list:
