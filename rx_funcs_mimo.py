@@ -17,86 +17,12 @@ import tensorflow as tf
 #from tx_mimo import create_data
 
 from matplotlib.animation import FuncAnimation
+from tensorflow import newaxis
 
 from tx_mimo_npilot import create_data, create_preamble, create_data_frame, init_tx_dict
 from system_tx import SysParUL
 import json
 
-# tested receiver cfgs
-#cfg_test =[(4, 'IRC'), (3, 'WMMSE'), (2, 'MMSE'), (1, 'EigRx'), (0, 'SumRx')]
-#cfg_test =[(4, 'IRC'), (0, 'MMSE')]
-#cfg_test =[(4, 'IRC'), (2, 'MMSE')]
-#cfg_test =[(14, 'IRC_SMMSE'), (4, 'IRC'), (12, 'MMSE_SMMSE'), (2, 'MMSE')]
-#cfg_test =[(102, 'MMSE_SW_rep1'), (2, 'MMSE_rep1')]
-#cfg_test =[(2, 'MMSE_rep4'), (2, 'MMSE_rep2'), (2, 'MMSE_rep1')]
-cfg_test =[(2, 'MMSE_rep4')]
-
-
-
-num_cfg = len(cfg_test)
-line_arr = list()
-line_snr_arr = list()
-
-DUMP_FILE = Path("dump_last_10_frames.pkl")
-#DUMP_FILE = Path("dump_last_10_frames_2GHZ_40m_chair.pkl")
-#DUMP_FILE = Path("dump_last_10_frames_1_8GHZ.pkl")
-#DUMP_FILE = Path('dump_last_10_frames_2GHZ_40m.pkl')
-NUM_DUMP_FRAMES = 10
-preloaded_frames = list()
-use_preloaded_frames = False
-preloaded_frame_idx = 0
-enable_animation = True
-
-
-def prompt_dump_choice():
-    while True:
-        user_input = input("Dump data from sdr.rx()? Type YES to capture 10 frames, NO to replay last dump, SKIP to use live SDR: ").strip().upper()
-        if user_input in ("YES", "NO", "SKIP"):
-            return user_input
-        print("Unsupported answer. Please respond with either YES, NO, or SKIP.")
-
-
-dump_decision = prompt_dump_choice()
-if dump_decision == "NO":
-    enable_animation = False
-
-# set list of metric to plot
-#NUM_FRAMES = 2* np.pi # length of plot
-NUM_FRAMES = 1024
-cfo_glob_dummy = 0.001
-#cfo_glob_dummy = 0.000
-
-#metrics_to_plot = ['SNR_guard', 'EVM', 'BER']
-metrics_to_plot = ['BER', 'EVM']
-
-num_subplots = len(metrics_to_plot)
-
-fig, ax = plt.subplots(num_subplots)
-
-for p_idx in range(num_subplots):
-    ax[p_idx].grid() # ber plot
-
-
-# define lines on plots per tested CFG
-colors = ['r-', 'g-', 'b-', 'c-', 'm-', 'y-']
-for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
-    #line_c, = ax.plot([], [], colors[idx], label=name_mimo)
-    for p_idx in range(num_subplots):
-
-        if metrics_to_plot[p_idx] == 'BER':
-            line_c, = ax[p_idx].semilogy([], [], colors[idx], label=name_mimo)
-        else:
-            line_c, = ax[p_idx].plot([], [], colors[idx], label=name_mimo)
-
-        line_arr.append(line_c)
-
-# create legend
-for p_idx in range(num_subplots):
-    ax[p_idx].legend()
-
-
-
-# util functions
 def calc_evm(dat_idl, dat_est):
     evm_c = 10.0 * np.log10( np.mean( np.abs(dat_idl.flatten())**2 )  / np.mean( np.abs(dat_idl.flatten() - dat_est.flatten())**2 )  )
     return evm_c
@@ -189,7 +115,7 @@ def find_edges(rx_sig, frame_len, preamble_len, CP_len, preamble_core, start_idx
     return idx_max, corr_list[rel_idx], sigma_arr, SNR_mean
 
 
-def cfo(frame_receive, corr_value, preamble_len):
+def cfo(frame_receive, corr_value, preamble_len, frame_len):
     angle_cfo = np.angle(corr_value) / preamble_len
 
     #print(f'CFOest={angle_cfo} CFO_near_idl_2antsdr=-0.0038')
@@ -199,7 +125,7 @@ def cfo(frame_receive, corr_value, preamble_len):
     return frame_receive
 
 
-def baseband_freq_domian(pilot_freq, N_sc_use):
+def baseband_freq_domian(pilot_freq, N_sc_use, inPar : SysParUL):
 
     if pilot_freq.ndim == 1:
         rec_sym_pilot = np.zeros((N_sc_use,), dtype=np.complex64)
@@ -225,17 +151,96 @@ def baseband_freq_domian(pilot_freq, N_sc_use):
 def channel_estimation(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_mode=0):
     h_time = np.fft.ifft(h_ls, N_fft, 0, norm='ortho')
 
-    if ce_mode == 1:
-        h_time_denoise = np.zeros_like(h_time)
+    if ce_mode >= 1:
+        # new code
+        # first find time shift
+        N_sc_in = h_ls.shape[0]
 
-        pos_high = np.where(np.abs(h_time)**2 > sigma_0)
+        h_first = h_ls[:-2]
+        h_second = h_ls[1:-1]
 
-        if len(pos_high) > 0:
-            eta_sw = ( np.abs(h_time[pos_high])**2 - sigma_0 ) / np.abs(h_time[pos_high])**2
+        avg_angle = np.angle( h_first.conj().T @ h_second )
 
-            h_time_denoise[pos_high] = eta_sw * h_time[pos_high]
+        x_arr = np.arange(0, N_sc_in)
+        ta_comp = np.exp(1j * -avg_angle * x_arr )
+        ta_comp_inv = np.exp(1j * avg_angle * x_arr)
 
-            h_time = h_time_denoise
+        h_ls_ta = h_ls * ta_comp
+
+        h_ls_ta = h_ls_ta[..., np.newaxis] # Nsc x 1
+        ff = 1
+
+        A_dft = np.fft.fft(np.eye(N_fft, dtype=np.complex64), norm='ortho')
+        A_idft = A_dft[:N_sc_in, :].conj().T
+
+        h_time_check = A_idft @ h_ls_ta
+
+        if False:
+            plt.plot(range(len(h_time_check)), np.abs(h_time_check))
+            plt.show()
+
+        W_max = 5
+        W_min = 1
+
+        A_pdft_max = A_dft[:N_sc_in, :W_max]
+
+        if W_min > 0:
+            A_pdft_min = A_dft[:N_sc_in, -W_min:]
+            A_pdft_join = np.hstack((A_pdft_max, A_pdft_min))
+        else:
+            A_pdft_join = A_pdft_max
+
+        # SVD transformation
+        if ce_mode == 3:
+
+            # SVD
+            U_c, S_c, V_c = np.linalg.svd(A_pdft_join, full_matrices=True)
+
+            n_take = W_max + W_min
+            U_c = U_c[:, :n_take]
+
+            A_pdft_join = U_c
+
+
+        R_cov_tt = A_pdft_join.conj().T @ A_pdft_join
+
+        if (ce_mode == 2) or (ce_mode == 3):
+            pdp_est = A_pdft_join.conj().T @ h_ls_ta
+            #D_noise = np.eye(R_cov_tt.shape[1], dtype=np.complex64) * sigma_0
+            eta_fact = 1.0
+            D_snr = np.diag( eta_fact * sigma_0 / np.abs(pdp_est[:, 0])**2).astype(np.complex64)
+            R_cov_tt = R_cov_tt + D_snr
+
+        W_ce = A_pdft_join @ np.linalg.inv(R_cov_tt) @ A_pdft_join.conj().T
+
+        h_ce_rez = W_ce @ h_ls_ta
+
+        h_ce_out = h_ce_rez[:, 0] * ta_comp_inv
+
+        if False:
+            fig1, ax1 = plt.subplots()
+            ax1.plot(range(N_sc_in), h_ce_out, label='CEout')
+            ax1.plot(range(N_sc_in), h_ls, label='CEin')
+            ax1.grid()
+            ax1.legend()
+            plt.show()
+
+        ff = 1
+
+        return h_ce_out
+
+        # old code soft window
+        if False:
+            h_time_denoise = np.zeros_like(h_time)
+
+            pos_high = np.where(np.abs(h_time)**2 > sigma_0)
+
+            if len(pos_high) > 0:
+                eta_sw = ( np.abs(h_time[pos_high])**2 - sigma_0 ) / np.abs(h_time[pos_high])**2
+
+                h_time_denoise[pos_high] = eta_sw * h_time[pos_high]
+
+                h_time = h_time_denoise
 
 
 
@@ -283,7 +288,7 @@ def estimate_SNR(pilot_freq, rec_sym_pilot, N_sc_use):
     return SNR_est
 
 
-def demodulate(eq_data, N_sc_use, mod_dict):
+def demodulate(eq_data, N_sc_use, mod_dict, inPar : SysParUL):
     bit_arr = []
 
     if mod_dict['num_bit'] == 1:
@@ -327,152 +332,13 @@ def get_ber(data_stream, bit_arr, N_sc_use):
     ber = np.sum(data_stream != bit_arr) / len(data_stream)
     return ber
 
-#do_load_file = False
-inPar = init_tx_dict()
-# imitate tranmitted
-(repeated_frame_tx, repeated_frame, frame_len, preamble_len, preamble_core, mod_dict_data, pilot_tx,
- bite_stream_tx, mod_data_tx, bite_stream_tx_uncode)  \
+def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse_mode=None):
+
+    inPar = init_tx_dict()
+    # imitate tranmitted
+    (repeated_frame_tx, repeated_frame, frame_len, preamble_len, preamble_core, mod_dict_data, pilot_tx,
+     bite_stream_tx, mod_data_tx, bite_stream_tx_uncode) \
         = create_data_frame(inPar)
-# end imitate
-
-#Thr_max = (inPar.N_sc_use * inPar.num_bits_sym) * (inPar.N_sc_use / inPar.N_fft) * inPar.delta_f / 1e3  # kbit/sec
-Thr_max = inPar.N_sc_use * inPar.num_bits_sym * inPar.Ndata / 1e3 # kbit per package
-
-# init Thr
-alpha_avg = 0.1
-Thr_dict = dict()
-EVM_dict = dict()
-BER_dict = dict()
-
-Thr_dict_list = dict()
-EVM_dict_list = dict()
-BER_dict_list = dict()
-
-for idx, (mimo_mode, name_mimo) in enumerate(cfg_test):
-    Thr_dict[name_mimo] = 0.0
-    EVM_dict[name_mimo] = 0.0
-    BER_dict[name_mimo] = 0.0
-
-    # init lists
-    Thr_dict_list[name_mimo] = list()
-    EVM_dict_list[name_mimo] = list()
-    BER_dict_list[name_mimo] = list()
-
-sdr = None
-if not inPar.dummyRx and dump_decision in ("YES", "SKIP"):
-    # additional params
-    do_load_file = False # should be False
-    do_save = False
-
-    sdr = adi.ad9361(uri='ip:192.168.2.2')
-    samp_rate = inPar.sample_rate  # must be <=30.72 MHz if both channels are enabled
-    num_samps = len(repeated_frame) * 1  # number of samples per buffer.  Can be different for Rx and Tx
-    rx_lo = int(inPar.center_freq)
-    rx_mode = "slow_attack"  # can be "manual" or "slow_attack"
-    rx_gain0 = 70
-    rx_gain1 = 70
-    tx_lo = rx_lo
-    tx_gain0 = -10
-    tx_gain1 = -10
-
-    sdr.rx_enabled_channels = [0, 1]
-    #sdr.rx_enabled_channels = [0]
-    sdr.sample_rate = int(samp_rate)
-    sdr.rx_lo = int(rx_lo)
-    sdr.gain_control_mode = rx_mode
-    sdr.rx_hardwaregain_chan0 = int(rx_gain0)
-    sdr.rx_hardwaregain_chan1 = int(rx_gain1)
-    sdr.rx_buffer_size = int(num_samps)
-elif not inPar.dummyRx:
-    # ensure flags defined even if SDR not initialized
-    do_load_file = False
-    do_save = False
-else:
-    # emulate Ntx
-    repeated_frame_tx = repeated_frame_tx.T
-    Nrx_test = 2
-    repeated_frame_tx = np.tile(repeated_frame_tx, (Nrx_test, 1))
-
-    # add AWGN channel for Tx signal
-    Es_tmp = np.linalg.norm(repeated_frame_tx.flatten())**2 / len(repeated_frame_tx.flatten())
-
-    SNR = inPar.SNR_dummy
-    sigma_noise_tmp = Es_tmp * 10**(-SNR/10)
-
-    noise_arr = np.sqrt(sigma_noise_tmp / 2) * ( (np.random.normal(0, 1, repeated_frame_tx.shape)) + 1j * (np.random.normal(0, 1, repeated_frame_tx.shape)) )
-
-    data_rx_dummy = repeated_frame_tx + noise_arr
-
-    # add dummpy CFO
-    cfo_set = cfo_glob_dummy
-
-    # random phase for both channels
-    a_amp = np.random.rand(repeated_frame_tx.shape[0], 1) + 1j * np.random.rand(repeated_frame_tx.shape[0], 1)
-    a_phase = a_amp / np.abs(a_amp)  # pure phase shift
-
-    cfo_arr = a_phase * np.exp(1j * np.arange(0, repeated_frame_tx.shape[1], 1) * cfo_set)
-
-    data_rx_dummy = data_rx_dummy * cfo_arr
-
-
-    SNR_est = 10.0 * np.log10(np.linalg.norm(repeated_frame_tx.flatten())**2 / np.linalg.norm(noise_arr.flatten())**2)
-    if enable_animation:
-        print(f'dummy Tx SNRset={SNR:.2f} SNR={SNR_est:.2f}')
-
-    #data = data_rx_dummy
-
-    sdr = []
-
-
-data = None
-if dump_decision == "YES":
-    if inPar.dummyRx:
-        if enable_animation:
-            print("Dummy Rx mode enabled. Skipping SDR dump request.")
-        data = data_rx_dummy
-    elif do_load_file:
-        if enable_animation:
-            print("Load-from-file mode enabled. Skipping SDR dump request.")
-    else:
-        dumped_frames = []
-        for frame_idx in range(NUM_DUMP_FRAMES):
-            frame_data = np.array(sdr.rx())
-            dumped_frames.append(frame_data)
-        with DUMP_FILE.open("wb") as dump_fd:
-            pickle.dump(dumped_frames, dump_fd)
-        if enable_animation:
-            print(f"Stored {NUM_DUMP_FRAMES} frames to {DUMP_FILE.resolve()}")
-        data = dumped_frames[-1]
-elif dump_decision == "SKIP":
-    if inPar.dummyRx:
-        if enable_animation:
-            print("Dummy Rx mode enabled. Skipping SDR request.")
-        data = data_rx_dummy
-    elif do_load_file:
-        if enable_animation:
-            print("Load-from-file mode enabled. Skipping SDR request.")
-    else:
-        # Use live SDR data without saving to dump file
-        data = np.array(sdr.rx())
-        if enable_animation:
-            print("Using live SDR data (dump skipped)")
-elif dump_decision == "NO":
-    if DUMP_FILE.exists():
-        with DUMP_FILE.open("rb") as dump_fd:
-            preloaded_frames = pickle.load(dump_fd)
-        if len(preloaded_frames) == 0:
-            raise ValueError(f"{DUMP_FILE} is empty. Capture frames with YES first.")
-        preloaded_frames = [np.array(frame) for frame in preloaded_frames]
-        use_preloaded_frames = True
-        preloaded_frame_idx = 0
-        data = preloaded_frames[0]
-        if enable_animation:
-            print(f"Loaded {len(preloaded_frames)} frames from {DUMP_FILE.resolve()}")
-    else:
-        raise FileNotFoundError(f"{DUMP_FILE.resolve()} not found. Run with YES to create it.")
-
-#### INIT part is finished
-def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse_mode=None):
 
     data = np.array(data)
 
@@ -506,6 +372,8 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse
     elif (mimo_mode == 2) or (mimo_mode == 3) or (mimo_mode == 4):
 
         rx_sig = data # Ntx x Nsamples
+    else:
+        rx_sig = data
 
     # rx_sig = data
     num_rx, rx_len = rx_sig.shape
@@ -514,7 +382,7 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse
     idx_max, corr_value, sigma_arr, SNR_guard = find_edges(rx_sig, frame_len_use, preamble_len, inPar.CP_len, preamble_core, start_idx=0)
     frame_receive = rx_sig[:, idx_max: idx_max + frame_len_use]
 
-    frame_receive = cfo(frame_receive, corr_value, preamble_len) if inPar.do_cfo_corr else frame_receive
+    frame_receive = cfo(frame_receive, corr_value, preamble_len, frame_len_use) if inPar.do_cfo_corr else frame_receive
 
     pilot_freq_rep = np.zeros( (inPar.pilot_repeat, num_rx, inPar.N_fft), dtype=np.complex64 )
 
@@ -567,7 +435,7 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse
             h_ls_rep = np.zeros( (inPar.pilot_repeat, num_rx, ls_len), dtype=np.complex64 )
             for rep_idx in range(inPar.pilot_repeat):
 
-                rec_sym_pilot = baseband_freq_domian(pilot_freq_rep[rep_idx, rx_idx, :], inPar.N_sc_use)
+                rec_sym_pilot = baseband_freq_domian(pilot_freq_rep[rep_idx, rx_idx, :], inPar.N_sc_use, inPar)
                 rec_sym_pilot_all[rep_idx, rx_idx, :] = rec_sym_pilot
 
                 # apply CE
@@ -646,7 +514,7 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse
     rho_su = 1.0 # init correlation between SU weights
 
     for rx_idx in range(num_rx):
-        rx_tmp = baseband_freq_domian(rec_data_sym_freq[rx_idx, :, :], inPar.N_sc_use)
+        rx_tmp = baseband_freq_domian(rec_data_sym_freq[rx_idx, :, :], inPar.N_sc_use, inPar)
         rec_sym_data_all[rx_idx, :, :] = rx_tmp[:, :]
 
     if mimo_mode == 0 or mimo_mode == 1 or mimo_mode == 5:
@@ -686,11 +554,21 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse
         else:
             rho_su = 1.0
 
+        # Rhh calc common
+        H_c = h_ls_all[0, :, :]
+        R_hh = H_c @ H_c.conj().T / H_c.shape[1]
+        cond_Rhh = np.linalg.cond(R_hh)
+        #print(f'cond_A={cond_Rhh}')
+
         for sc_idx in range(rec_sym_data_all.shape[1]):
 
             h_c = h_ls_all[:, :, sc_idx]
 
             h_c = h_c.T
+
+            # calculate condition number
+            #cond_A = np.linalg.cond(h_c.conj().T @ h_c)
+            #print(f'cond_A={cond_A}')
 
             r_c = rec_sym_data_all[:, sc_idx, :] # Nrx x Ndata
             # MRC
@@ -749,9 +627,9 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse
     for tx_idx in range(iNtx):
 
         if inPar.do_sc_fdm:
-            bit_arr, bit_arr_uncode = demodulate(inPar.T_prec.conj().T @ eq_data[tx_idx, :], inPar.N_sc_use, mod_dict_data)
+            bit_arr, bit_arr_uncode = demodulate(inPar.T_prec.conj().T @ eq_data[tx_idx, :], inPar.N_sc_use, mod_dict_data, inPar)
         else:
-            bit_arr, bit_arr_uncode = demodulate(eq_data[tx_idx, :], inPar.N_sc_use, mod_dict_data)
+            bit_arr, bit_arr_uncode = demodulate(eq_data[tx_idx, :], inPar.N_sc_use, mod_dict_data, inPar)
 
         # unwrap data to bitstream
         bit_arr = np.reshape(bit_arr, newshape=(bit_arr.shape[0] * bit_arr.shape[1], 1), order='F') # Nbit_total x 1
@@ -767,263 +645,4 @@ def receiver_MIMO(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse
 
         #SNR_est = estimate_SNR(pilot_freq, rec_sym_pilot_all, N_sc_use)
 
-    return ber_arr, SNR_guard, rho_avg_plot, evm_arr
-
-#### RECEIVER PART start - test reception chain
-if not inPar.dummyRx:
-    if use_preloaded_frames:
-        if enable_animation:
-            print("Replaying frames from dump file for initial analysis.")
-    elif not do_load_file:
-
-        data = np.array(sdr.rx())
-
-
-        if enable_animation:
-            print(f'SDR reception is OK!!!')
-
-        if do_save:
-            #path_save = f'C:\\dev\\git_tutor\\python_sdr\\tmp.mat'
-            path_save = f'tmp.mat'
-            print(path_save)
-            scipy.io.savemat(path_save, {'data': data})
-
-        if enable_animation:
-            print(data[0].shape)
-    else:
-        if enable_animation:
-            print(f'Reception from file is OK!!!')
-
-        path_save = f'tmp.mat'
-        mat = scipy.io.loadmat(path_save)
-        data = mat['data']
-        data = np.array(data)
-        # test receiver
-else:
-    # code for dummy receeption
-    # input array data set globally
-    if data is None:
-        data = data_rx_dummy
-    if enable_animation:
-        print('Dummpy Rx mode')
-    #exit(0)
-
-# FOR DEBUG first frame
-for mimo, rec_name in cfg_test:
-
-    # parse configs
-    try:
-        pilot_rep_use = int(re.findall('_rep(\d+)', rec_name)[0])
-    except:
-        pilot_rep_use = 1
-
-    ber_c, snr_c, rho_avg_plot, evm_rx = receiver_MIMO(data, mimo, inPar.Ntx, pilot_rep_use)
-
-    if enable_animation:
-        print(f'mimo={mimo} rec_name={rec_name}, snr_c={snr_c}, evm={np.mean(evm_rx)}')
-
-        for tx_idx in range(inPar.Ntx):
-            print(f'Layer={tx_idx} ber={ber_c[tx_idx]}')
-
-    time.sleep(0.01)
-
-
-def update(frame1):
-
-    global preloaded_frame_idx
-    ### SDR reception
-    if use_preloaded_frames:
-        if len(preloaded_frames) == 0:
-            raise ValueError("Dump file is empty. Cannot replay frames.")
-        data = preloaded_frames[preloaded_frame_idx]
-        preloaded_frame_idx = (preloaded_frame_idx + 1) % len(preloaded_frames)
-    elif not inPar.dummyRx:
-        if not do_load_file:
-            data = sdr.rx()
-
-            if do_save:
-                path_save = f'tmp.mat'
-                if enable_animation:
-                    print(path_save)
-                data = np.array(data)
-                scipy.io.savemat(path_save, {'data': data})
-                if enable_animation:
-                    print(data[0].shape)
-
-        else:
-            path_save = f'tmp.mat'
-            mat = scipy.io.loadmat(path_save)
-            data = mat['data']
-            data = np.array(data)
-    else:
-        #print('Dummpy Rx mode')
-        #exit(1)
-        #data = data_rx_dummy
-        noise_arr = np.sqrt(sigma_noise_tmp / 2) * ((np.random.normal(0, 1, repeated_frame_tx.shape)) + 1j * (
-            np.random.normal(0, 1, repeated_frame_tx.shape)))
-
-        data_rx_dummy = repeated_frame_tx + noise_arr
-        SNR_est = 10.0 * np.log10(
-            np.linalg.norm(repeated_frame_tx.flatten()) ** 2 / np.linalg.norm(noise_arr.flatten()) ** 2)
-        #print(f'dummy Tx SNRset={SNR:.2f} SNR={SNR_est:.2f}')
-
-        # add dummpy CFO
-        cfo_set = cfo_glob_dummy
-
-        # random phase for both channels
-        a_amp = np.random.rand(repeated_frame_tx.shape[0], 1) + 1j * np.random.rand(repeated_frame_tx.shape[0], 1)
-        a_phase = a_amp / np.abs(a_amp) # pure phase shift
-
-        cfo_arr = a_phase * np.exp( 1j* np.arange(0, repeated_frame_tx.shape[1], 1) * cfo_set)
-        data_rx_dummy = data_rx_dummy * cfo_arr
-
-        data = data_rx_dummy
-        pass
-
-    for idx, (mimo, rec_name) in enumerate(cfg_test):
-
-        # parse configs
-        try:
-            pilot_rep_use = int(re.findall('_rep(\d+)', rec_name)[0])
-        except:
-            pilot_rep_use = 1
-
-
-        ber_c, snr_c, rho_avg_plot, evm_arr = receiver_MIMO(data, mimo, inPar.Ntx, pilot_rep_use)
-
-        if not enable_animation:
-            ber_mean = np.mean(np.array(ber_c))
-            evm_mean = np.mean(np.array(evm_arr))
-            layer_stats = ", ".join([f"L{tx_idx}:{ber_val:.4e}" for tx_idx, ber_val in enumerate(ber_c)])
-            print(f'Frame {int(frame1)} [{rec_name} RecMode={mimo}] BER_mean={ber_mean:.4e} ({layer_stats}) | EVM_avg={evm_mean:.4f}')
-
-        thr_c =  Thr_max * ( inPar.Ntx - np.sum( np.array(ber_c) ))
-
-        for p_idx in range(num_subplots):
-
-            x1, y1 = line_arr[num_subplots * idx + p_idx].get_data()
-            x1 = np.append(x1, frame1)
-
-            if metrics_to_plot[p_idx] == 'SNR_guard':
-                y1 = np.append(y1, snr_c)
-            elif metrics_to_plot[p_idx] == 'EVM':
-                evm_plot = np.mean(evm_arr)
-                evm_thr = 7.0
-                if evm_plot > evm_thr:
-                    evm_plot = evm_thr
-                #y1 = np.append(y1, evm_plot)
-                # apply alpha filter
-
-                EVM_dict_list[rec_name].append(evm_plot)
-
-                if len(x1) == 1:
-                    EVM_dict[rec_name] = evm_plot
-                else:
-                    EVM_dict[rec_name] = evm_plot * alpha_avg + (1.0 - alpha_avg) * EVM_dict[rec_name]
-
-                #y1 = np.append(y1, EVM_dict[rec_name])
-                y1 = np.append(y1, np.mean(EVM_dict_list[rec_name]))
-
-
-            elif metrics_to_plot[p_idx] == 'BER':
-
-                #y1 = np.append(y1, np.mean(ber_c))
-                ber_plot = np.mean(ber_c)
-
-                BER_dict_list[rec_name].append(ber_plot)
-                if len(x1) == 1:
-                    BER_dict[rec_name] = ber_plot
-                else:
-                    BER_dict[rec_name] = ber_plot * alpha_avg + (1.0 - alpha_avg) * BER_dict[rec_name]
-
-                #y1 = np.append(y1, BER_dict[rec_name])
-                y1 = np.append(y1, np.mean(BER_dict_list[rec_name]))
-
-            line_arr[num_subplots  * idx + p_idx].set_data(x1, y1)
-
-        # x1, y1 = line_arr[num_subplots * idx + 1].get_data()
-        # # x1, y1 = line_c.get_data()
-        #
-        # x1 = np.append(x1, frame1)
-        # y1 = np.append(y1, snr_c)
-        # line_arr[num_subplots * idx + 1].set_data(x1, y1)
-        #
-        # x1, y1 = line_arr[num_subplots * idx + 2].get_data()
-        # x1 = np.append(x1, frame1)
-        # y1 = np.append(y1, rho_avg_plot)
-        # line_arr[num_subplots * idx + 2].set_data(x1, y1)
-        #
-        # # plot throughput
-        # x1, y1 = line_arr[num_subplots * idx + 3].get_data()
-        # x1 = np.append(x1, frame1)
-        #
-        # if len(x1) == 0:
-        #     Thr_dict[rec_name] = thr_c
-        # else:
-        #     Thr_dict[rec_name] = thr_c * alpha_avg + (1.0 - alpha_avg) * Thr_dict[rec_name]
-        #
-        # y1 = np.append(y1, Thr_dict[rec_name])
-        # line_arr[num_subplots * idx + 3].set_data(x1, y1)
-
-
-    return (*line_arr,)
-
-
-# comment for pratice keyboard
-
-# init plots
-def init():
-    #metrics_to_plot = ['SNR_guard', 'EVM', 'BER']
-    for p_idx in range(num_subplots):
-
-        if metrics_to_plot[p_idx] == "SNR_guard":
-            ax[p_idx].set_xlabel('Time')
-            ax[p_idx].set_ylabel(f'SNRguard')
-            ax[p_idx].set_xlim(0, NUM_FRAMES)
-            ax[p_idx].set_ylim(0, 40)
-        elif metrics_to_plot[p_idx] == "EVM":
-            ax[p_idx].set_xlabel('Time')
-            ax[p_idx].set_ylabel(f'EVM')
-            ax[p_idx].set_xlim(0, NUM_FRAMES)
-            ax[p_idx].set_ylim(-5, 9.0)
-        elif metrics_to_plot[p_idx] == "BER":
-            ax[p_idx].set_xlabel('Time')
-            ax[p_idx].set_ylabel(f'BER@QAM{2**inPar.num_bits_sym}')
-            ax[p_idx].set_xlim(0, NUM_FRAMES)
-            ax[p_idx].set_ylim(10 ** (-2), 10 ** (-0))
-
-    # ax[0].set_xlabel('Time')
-    # ax[0].set_xlim(0, 2*np.pi)
-    # ax[0].set_ylabel(f'BER@QAM{2**inPar.num_bits_sym}')
-    # ax[0].set_ylim(10 ** (-4), 10 ** (-0))
-    #
-    # ax[1].set_xlabel('Time')
-    # ax[1].set_ylabel(f'SNRguard')
-    # ax[1].set_xlim(0, 2 * np.pi)
-    # ax[1].set_ylim(0, 45)
-    #
-    # ax[2].set_xlabel('Time')
-    # ax[2].set_ylabel(f'SU correlation')
-    # ax[2].set_xlim(0, 2 * np.pi)
-    # ax[2].set_ylim(0.0, 1.0)
-    #
-    # ax[3].set_xlabel('Time')
-    # ax[3].set_ylabel(f'Throughput')
-    # ax[3].set_xlim(0, 2 * np.pi)
-    # ax[3].set_ylim(0.0, 1.2 * Thr_max * inPar.Ntx)
-
-
-
-    return (*line_arr,)
-
-def main():
-    if enable_animation:
-        ani = FuncAnimation(fig, update, frames=np.linspace(0, NUM_FRAMES, NUM_FRAMES), init_func=init, blit=True)
-        plt.show()
-    else:
-        total_frames = len(preloaded_frames)
-        for frame_idx in range(total_frames):
-            update(frame_idx)
-
-if __name__ == "__main__":
-    main()
+    return ber_arr, SNR_guard, rho_avg_plot, evm_arr, R_hh

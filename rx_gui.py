@@ -16,7 +16,8 @@ import json
 
 # Rx imports
 import adi
-from rx_mimo_plot_npilot import receiver_MIMO
+#from rx_mimo_plot_npilot import receiver_MIMO
+from rx_funcs_mimo import receiver_MIMO_v2
 import re
 
 # glob Rx Params
@@ -96,6 +97,12 @@ class RxGUI:
         # MIMO detection mode
         self.mimo_mode = 2  # Default to mimo_mode=2 (MMSE detection mode)
 
+        # EVM trial variables
+        self.evm_trial_active = False
+        self.evm_trial_values = []
+        self.evm_trial_start_time = None
+        self.evm_trial_duration = 10  # 10 seconds
+
         # Create GUI elements
         self.setup_ui()
 
@@ -156,10 +163,11 @@ class RxGUI:
             1: "Mode 1 (EigRx)",
             2: "Mode 2 (MMSE)",
             3: "Mode 3 (IRC)",
-            4: "Mode 4 (IRC Advanced)"
+            4: "Mode 4 (IRC Advanced)",
+            5: "Mode 5 (Single Rx)"
         }
 
-        for mode_value in range(5):
+        for mode_value in range(6):
             rb = ttk.Radiobutton(
                 mimo_frame,
                 text=mimo_mode_labels[mode_value],
@@ -216,6 +224,45 @@ class RxGUI:
             command=self.ce_mode_changed
         )
         ce_mode_1.pack(side=tk.TOP, padx=5, pady=2)
+
+        # Create EVM trial section
+        evm_trial_frame = ttk.LabelFrame(right_frame, text="EVM Trial")
+        evm_trial_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 5))
+
+        self.evm_trial_button = ttk.Button(
+            evm_trial_frame,
+            text="Start EVM Trial",
+            command=self.start_evm_trial
+        )
+        self.evm_trial_button.pack(side=tk.TOP, padx=5, pady=5, fill=tk.X)
+
+        # Progress bar for EVM trial
+        self.evm_progress_var = tk.DoubleVar(value=0.0)
+        self.evm_progress_bar = ttk.Progressbar(
+            evm_trial_frame,
+            variable=self.evm_progress_var,
+            maximum=100.0,
+            length=200,
+            mode='determinate'
+        )
+        self.evm_progress_bar.pack(side=tk.TOP, padx=5, pady=5, fill=tk.X)
+
+        # Label for remaining time
+        self.evm_time_label = ttk.Label(
+            evm_trial_frame,
+            text="",
+            font=('Arial', 9)
+        )
+        self.evm_time_label.pack(side=tk.TOP, padx=5, pady=2)
+
+        # Label for average EVM result
+        self.evm_result_label = ttk.Label(
+            evm_trial_frame,
+            text="",
+            font=('Arial', 9, 'bold'),
+            foreground='blue'
+        )
+        self.evm_result_label.pack(side=tk.TOP, padx=5, pady=2)
 
         # Create radio buttons for metric selection
         self.metric_var = tk.StringVar(value=self.current_metric)
@@ -295,6 +342,54 @@ class RxGUI:
         self.ax.set_ylabel(self.current_metric)
         self.update_plot_data()
 
+    def start_evm_trial(self):
+        """Start EVM trial - collect EVM values for 10 seconds"""
+        if not self.evm_trial_active:
+            self.evm_trial_active = True
+            self.evm_trial_values = []
+            self.evm_trial_start_time = time.time()
+            self.evm_trial_button.config(state=tk.DISABLED, text="EVM Trial Running...")
+            self.evm_result_label.config(text="")
+            self.evm_progress_var.set(0.0)
+            self.evm_time_label.config(text="")
+            self.update_evm_trial_progress()
+
+    def update_evm_trial_progress(self):
+        """Update progress bar and check if trial is complete"""
+        if self.evm_trial_active:
+            elapsed = time.time() - self.evm_trial_start_time
+            remaining = max(0, self.evm_trial_duration - elapsed)
+            progress = (elapsed / self.evm_trial_duration) * 100.0
+            
+            self.evm_progress_var.set(progress)
+            self.evm_time_label.config(text=f"Remaining: {remaining:.1f} seconds")
+            
+            if elapsed >= self.evm_trial_duration:
+                self.finish_evm_trial()
+            else:
+                # Schedule next update
+                self.root.after(100, self.update_evm_trial_progress)
+
+    def finish_evm_trial(self):
+        """Finish EVM trial and display average"""
+        self.evm_trial_active = False
+        
+        if len(self.evm_trial_values) > 0:
+            avg_evm = np.mean(self.evm_trial_values)
+            self.evm_result_label.config(
+                text=f"Average EVM: {avg_evm:.4f}",
+                foreground='green'
+            )
+        else:
+            self.evm_result_label.config(
+                text="No EVM data collected",
+                foreground='red'
+            )
+        
+        self.evm_progress_var.set(100.0)
+        self.evm_time_label.config(text="Trial Complete")
+        self.evm_trial_button.config(state=tk.NORMAL, text="Start EVM Trial")
+
     def update_plot_data(self):
         if len(self.time_points) > 0:
             # Get the last 20 points or all points if less than 20
@@ -371,11 +466,15 @@ class RxGUI:
                 # actual SDR transmission
                 data = sdr.rx()
 
-            ber_c, snr_c, rho_avg_plot, evm_arr = receiver_MIMO(data, self.mimo_mode, inPar.Ntx, pilot_rep_use, ce_mode=self.ce_mode, smmse_mode=self.smmse_mode)
+            ber_c, snr_c, rho_avg_plot, evm_arr, Rhh_c = receiver_MIMO_v2(data, self.mimo_mode, inPar.Ntx, pilot_rep_use, ce_mode=self.ce_mode, smmse_mode=self.smmse_mode)
 
             new_SNR_guard = snr_c
             new_BER = np.mean(np.array(ber_c).flatten())
             new_EVM = np.mean(np.array(evm_arr).flatten())
+            
+            # Collect EVM value if trial is active
+            if self.evm_trial_active:
+                self.evm_trial_values.append(new_EVM)
                 # end dummpy Rx
 
             # end update Rx status
