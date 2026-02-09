@@ -28,6 +28,16 @@ def calc_evm(dat_idl, dat_est):
     return evm_c
 
 
+def _hard_quantize_to_constellation(sym, constellation_points):
+    """Map complex symbols to nearest constellation point."""
+    sym_flat = sym.reshape(-1)
+    const = np.asarray(constellation_points, dtype=np.complex64).reshape(1, -1)
+    dist = np.abs(sym_flat[:, None] - const) ** 2
+    idx = np.argmin(dist, axis=1)
+    sym_hat = const[0, idx]
+    return sym_hat.reshape(sym.shape)
+
+
 #############################################################################
 def find_edges(rx_sig, frame_len, preamble_len, CP_len, preamble_core, start_idx):
     corr_list = []
@@ -148,8 +158,117 @@ def baseband_freq_domian(pilot_freq, N_sc_use, inPar : SysParUL):
     return rec_sym_pilot
 
 
-def channel_estimation(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_mode=0):
+def _interpolate_dc_region(h_freq, dc_mask_half_width):
+    """Replace DC and neighboring bins by linear interpolation to reduce DC spike impact."""
+    if dc_mask_half_width <= 0 or len(h_freq) < 3:
+        return h_freq
+    n = len(h_freq)
+    dc_idx = n // 2
+    lo = max(0, dc_idx - dc_mask_half_width)
+    hi = min(n, dc_idx + dc_mask_half_width + 1)
+    if lo >= hi:
+        return h_freq
+    left_val = h_freq[lo - 1] if lo > 0 else h_freq[hi] if hi < n else 0.0
+    right_val = h_freq[hi] if hi < n else h_freq[lo - 1] if lo > 0 else 0.0
+    denom = hi - lo
+    for i in range(lo, hi):
+        t = (i - lo) / denom if denom > 0 else 0.0
+        h_freq[i] = (1.0 - t) * left_val + t * right_val
+    return h_freq
+
+
+def _esprit_delays(h_ls, n_taps, order=None):
+    """
+    ESPRIT super-resolution: estimate n_taps complex poles z_l from frequency snapshot h_ls.
+    Model: h_ls(k) = sum_l a_l * z_l^k + noise. Returns z_poles (length n_taps) for MMSE projection.
+    """
+    n = len(h_ls)
+    if n_taps < 1 or n < n_taps + 2:
+        return np.array([1.0], dtype=np.complex64)  # fallback single pole
+    # ESPRIT order M: need M >= n_taps+1 and 2*M-2 <= n => M <= (n+2)//2
+    if order is None:
+        order = min(n_taps + 6, (n + 2) // 2)
+    order = max(n_taps + 1, min(order, (n + 2) // 2))
+    # Hankel: row i = [h_ls(i), h_ls(i+1), ..., h_ls(i+order-1)], i=0..n-order
+    n_rows = n - order + 1
+    X1 = np.zeros((n_rows, order - 1), dtype=np.complex64)
+    X2 = np.zeros((n_rows, order - 1), dtype=np.complex64)
+    for i in range(n_rows):
+        for j in range(order - 1):
+            X1[i, j] = h_ls[i + j]
+            X2[i, j] = h_ls[i + j + 1]
+    # Z = [X1; X2], 2*n_rows x (order-1)
+    Z = np.vstack([X1, X2])
+    U, S, _ = np.linalg.svd(Z, full_matrices=False)
+    # Signal subspace: first n_taps left singular vectors
+    L = min(n_taps, order - 1, U.shape[1])
+    Us = U[:, :L]
+    Us1 = Us[:n_rows, :]
+    Us2 = Us[n_rows:, :]
+    # Phi such that Us2 ≈ Us1 @ Phi  =>  Phi = pinv(Us1) @ Us2
+    Phi = np.linalg.lstsq(Us1, Us2, rcond=None)[0]
+    z_poles = np.linalg.eigvals(Phi)
+    z_poles = np.array(z_poles, dtype=np.complex64)
+    # Prefer poles inside or near unit circle (physical delays)
+    inside = np.abs(z_poles) <= 1.0 + 0.1
+    z_poles = z_poles[inside] if np.any(inside) else z_poles
+    # Take up to n_taps, ordered by magnitude (strongest first)
+    if len(z_poles) > n_taps:
+        idx = np.argsort(np.abs(z_poles))[::-1][:n_taps]
+        z_poles = z_poles[idx]
+    if len(z_poles) < n_taps:
+        pad = np.exp(-2j * np.pi * np.arange(1, n_taps - len(z_poles) + 1) / n)
+        z_poles = np.concatenate([z_poles, pad]).astype(np.complex64)
+    return z_poles[:n_taps]
+
+
+def _detect_dc_spike(h_ls, dc_mask_half_width, threshold):
+    """True if DC region power exceeds threshold * median power of other subcarriers."""
+    if threshold <= 0 or len(h_ls) < 3:
+        return False
+    n = len(h_ls)
+    dc_idx = n // 2
+    lo = max(0, dc_idx - dc_mask_half_width)
+    hi = min(n, dc_idx + dc_mask_half_width + 1)
+    p_dc = np.mean(np.abs(h_ls[lo:hi]) ** 2)
+    other_idx = np.concatenate([np.arange(lo), np.arange(hi, n)])
+    if len(other_idx) == 0:
+        return False
+    p_other = np.median(np.abs(h_ls[other_idx]) ** 2)
+    if p_other <= 0:
+        return True
+    return (p_dc / p_other) > threshold
+
+
+def channel_estimation(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_mode=0, dc_mask_half_width=0, dc_adaptive_threshold=0.0, n_taps_esprit=5):
+    # Adaptive DC handling: only interpolate when DC spike is detected (avoids hurting BER when no spike)
+    h_ls = np.array(h_ls, dtype=np.complex64, copy=True)
+    if dc_mask_half_width > 0 and dc_adaptive_threshold > 0 and _detect_dc_spike(h_ls, dc_mask_half_width, dc_adaptive_threshold):
+        h_ls = _interpolate_dc_region(h_ls, dc_mask_half_width)
     h_time = np.fft.ifft(h_ls, N_fft, 0, norm='ortho')
+
+    if ce_mode == 4:
+        # CE_mode=4: ESPRIT super-resolution delay profile + MMSE projection (LS + diagonal loading)
+        N_sc_in = h_ls.shape[0]
+        L = max(1, min(n_taps_esprit, N_sc_in // 2 - 1))
+        z_poles = _esprit_delays(h_ls, L)
+        L = len(z_poles)
+        # Vandermonde: A[k,l] = z_l^k  =>  frequency response of tap l at subcarrier k
+        k_arr = np.arange(N_sc_in, dtype=np.int32)
+        A_esprit = np.zeros((N_sc_in, L), dtype=np.complex64)
+        for l in range(L):
+            A_esprit[:, l] = np.power(z_poles[l], k_arr)
+        # LS tap gains: g = (A^H A)^{-1} A^H h_ls
+        AHA = A_esprit.conj().T @ A_esprit
+        g_ls = np.linalg.solve(AHA, A_esprit.conj().T @ h_ls)
+        # Diagonal loading: R = A^H A + diag(sigma_0 / (|g_l|^2 + eps))
+        pdp = np.abs(g_ls) ** 2
+        eps = np.finfo(np.float32).eps * (1.0 + np.max(pdp))
+        D_load = np.diag((sigma_0 / (pdp + eps)).astype(np.float32)).astype(np.complex64)
+        R_mmse = AHA + D_load
+        W_ce = A_esprit @ np.linalg.solve(R_mmse, A_esprit.conj().T)
+        h_ce_out = (W_ce @ h_ls).ravel()
+        return h_ce_out
 
     if ce_mode >= 1:
         # new code
@@ -206,9 +325,10 @@ def channel_estimation(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_mode=0)
 
         if (ce_mode == 2) or (ce_mode == 3):
             pdp_est = A_pdft_join.conj().T @ h_ls_ta
-            #D_noise = np.eye(R_cov_tt.shape[1], dtype=np.complex64) * sigma_0
             eta_fact = 1.0
-            D_snr = np.diag( eta_fact * sigma_0 / np.abs(pdp_est[:, 0])**2).astype(np.complex64)
+            pdp_power = np.abs(pdp_est[:, 0]) ** 2
+            eps = np.finfo(np.complex64).eps * (1.0 + np.max(pdp_power))
+            D_snr = np.diag((eta_fact * sigma_0 / (pdp_power + eps)).astype(np.float32)).astype(np.complex64)
             R_cov_tt = R_cov_tt + D_snr
 
         W_ce = A_pdft_join @ np.linalg.inv(R_cov_tt) @ A_pdft_join.conj().T
@@ -332,7 +452,7 @@ def get_ber(data_stream, bit_arr, N_sc_use):
     ber = np.sum(data_stream != bit_arr) / len(data_stream)
     return ber
 
-def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse_mode=None):
+def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, smmse_mode=None, dc_mask_half_width=0, dc_adaptive_threshold=0.0, robust_pilot_avg=False, exclude_dc_from_ruu=True, n_taps_esprit=5, return_channel_for_plot=False, turbo_enable=False, turbo_iters=1, turbo_pilot_weight=0.5):
 
     inPar = init_tx_dict()
     # imitate tranmitted
@@ -419,6 +539,9 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
 
     h_ls_all = np.zeros((iNtx, num_rx, inPar.N_sc_use), dtype=np.complex64)
     rec_sym_pilot_all = np.zeros((inPar.pilot_repeat, num_rx, inPar.N_sc_use), dtype=np.complex64)
+    h_ls_pilot_full = None
+    if return_channel_for_plot or turbo_enable:
+        h_ls_pilot_full = np.full((iNtx, num_rx, inPar.N_sc_use), np.nan, dtype=np.complex64)
 
     Ruu = np.zeros((num_rx, num_rx), dtype=np.complex64)
 
@@ -443,23 +566,35 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
 
                 h_ls_rep[rep_idx, rx_idx, :] = h_ls
 
-            # LS average
-            h_ls = h_ls_rep[0, rx_idx, :]
-            if True:
+            # LS average over pilot repeats (mean or robust median)
+            if robust_pilot_avg and pilot_rep_use > 1:
+                h_ls = np.median(h_ls_rep[:pilot_rep_use, rx_idx, :], axis=0).astype(np.complex64)
+            else:
+                h_ls = h_ls_rep[0, rx_idx, :]
                 for rep_idx in range(1, pilot_rep_use):
-                    h_ls_c = h_ls_rep[rep_idx, rx_idx, :]
-                    h_ls = h_ls + h_ls_c
+                    h_ls = h_ls + h_ls_rep[rep_idx, rx_idx, :]
                 h_ls = h_ls / pilot_rep_use
 
-            h_ls_all[tx_idx, rx_idx, :] = channel_estimation(h_ls, inPar.CP_len, inPar.N_fft, comb_step, sigma_arr[rx_idx], ce_mode) if inPar.do_ce else h_ls
+            if h_ls_pilot_full is not None:
+                h_ls_pilot_full[tx_idx, rx_idx, comb_start::comb_step] = h_ls
 
-        # usamples estimation
+            h_ls_all[tx_idx, rx_idx, :] = channel_estimation(h_ls, inPar.CP_len, inPar.N_fft, comb_step, sigma_arr[rx_idx], ce_mode, dc_mask_half_width, dc_adaptive_threshold, n_taps_esprit) if inPar.do_ce else h_ls
+
+        # Interference covariance from pilot residuals; exclude DC columns so spike does not inflate Ruu
         for rep_idx in range(inPar.pilot_repeat):
             u_mx = rec_sym_pilot_all[rep_idx, :, comb_start::comb_step] - h_ls_all[tx_idx, :, comb_start::comb_step] * pilot_tx[tx_idx][comb_start::comb_step, 0]
-            Ruu_c = u_mx @ u_mx.conj().T / u_mx.shape[1]
+            if exclude_dc_from_ruu:
+                dc_baseband = inPar.N_sc_use // 2
+                valid_cols = [k for k in range(u_mx.shape[1]) if (comb_start + k * comb_step) != dc_baseband]
+                if len(valid_cols) > 0:
+                    u_mx_ruu = u_mx[:, valid_cols]
+                    Ruu_c = u_mx_ruu @ u_mx_ruu.conj().T / u_mx_ruu.shape[1]
+                else:
+                    Ruu_c = u_mx @ u_mx.conj().T / u_mx.shape[1]
+            else:
+                Ruu_c = u_mx @ u_mx.conj().T / u_mx.shape[1]
 
-
-        Ruu = Ruu + (Ruu_c / inPar.pilot_repeat)
+            Ruu = Ruu + (Ruu_c / inPar.pilot_repeat)
 
 
 
@@ -517,58 +652,51 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
         rx_tmp = baseband_freq_domian(rec_data_sym_freq[rx_idx, :, :], inPar.N_sc_use, inPar)
         rec_sym_data_all[rx_idx, :, :] = rx_tmp[:, :]
 
-    if mimo_mode == 0 or mimo_mode == 1 or mimo_mode == 5:
-        # outdated modes
-        rec_data_perm = np.transpose(rec_sym_data_all, axes=(2, 0, 1))
-        h_ls_one = h_ls_all[0, :, :]
-        #eq_data = rec_sym_data_all[0, :] / h_ls_all[0, 0, :]
+    def _equalize_with_channel(h_ls_in):
+        h_ls_work = np.array(h_ls_in, dtype=np.complex64, copy=True)
+        if mimo_mode == 0 or mimo_mode == 1 or mimo_mode == 5:
+            # outdated modes
+            rec_data_perm = np.transpose(rec_sym_data_all, axes=(2, 0, 1))
+            eq_data_local = rec_data_perm / h_ls_work
+            eq_data_local = np.transpose(eq_data_local, axes=(1, 2, 0))
+            rho_su_local = 1.0
+            H_c_local = h_ls_work[0, :, :]
+            R_hh_local = H_c_local @ H_c_local.conj().T / H_c_local.shape[1]
+            return eq_data_local, rho_su_local, R_hh_local
 
-        eq_data = rec_data_perm / h_ls_all
-        eq_data = np.transpose(eq_data, axes=(1, 2, 0))
-
-
-    else:
-        eq_data = np.zeros( (iNtx, inPar.N_sc_use, inPar.Ndata), dtype=np.complex64)
+        eq_data_local = np.zeros((iNtx, inPar.N_sc_use, inPar.Ndata), dtype=np.complex64)
         rho_avg = list()
 
         # SU weights correlation
         V_su = np.zeros((num_rx, iNtx), dtype=np.complex64)
         for tx_idx in range(iNtx):
-            H_c = h_ls_all[tx_idx, :, :]
+            H_c = h_ls_work[tx_idx, :, :]
             R_hh = H_c @ H_c.conj().T / H_c.shape[1]
             U_c, S_c, V_c = np.linalg.svd(R_hh)
 
             V_su[:, tx_idx] = U_c[:, 0]
 
-            # SMME start
+            # SMMSE start
             if (smmse_mode > 0):
                 alpha_ruu = 0.3
                 W_smmse = R_hh @ np.linalg.inv(R_hh + alpha_ruu * Ruu)
 
-                h_ls_all[tx_idx, :, :] = W_smmse @ h_ls_all[tx_idx, :, :]
-
+                h_ls_work[tx_idx, :, :] = W_smmse @ h_ls_work[tx_idx, :, :]
 
         if inPar.Ntx > 1:
             R_corr = V_su.conj().T @ V_su
-            rho_su = R_corr[0, 1]
+            rho_su_local = R_corr[0, 1]
         else:
-            rho_su = 1.0
+            rho_su_local = 1.0
 
         # Rhh calc common
-        H_c = h_ls_all[0, :, :]
-        R_hh = H_c @ H_c.conj().T / H_c.shape[1]
-        cond_Rhh = np.linalg.cond(R_hh)
-        #print(f'cond_A={cond_Rhh}')
+        H_c = h_ls_work[0, :, :]
+        R_hh_local = H_c @ H_c.conj().T / H_c.shape[1]
 
         for sc_idx in range(rec_sym_data_all.shape[1]):
 
-            h_c = h_ls_all[:, :, sc_idx]
-
+            h_c = h_ls_work[:, :, sc_idx]
             h_c = h_c.T
-
-            # calculate condition number
-            #cond_A = np.linalg.cond(h_c.conj().T @ h_c)
-            #print(f'cond_A={cond_A}')
 
             r_c = rec_sym_data_all[:, sc_idx, :] # Nrx x Ndata
             # MRC
@@ -579,7 +707,6 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
                     x_c = h_c.conj().T @ r_c
             elif mimo_mode == 3:
                 # W-MRC // IRC
-
                 Ruu_d = np.diag(sigma_arr)
                 Ruu_d = Ruu_d.astype(np.complex64)
                 Ruu_d_inv = np.linalg.inv(Ruu_d)
@@ -600,7 +727,58 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
 
                 x_c = np.linalg.inv(h_c.conj().T @ Ruu_inv @ h_c) @ h_c.conj().T @ Ruu_inv @ r_c
 
-            eq_data[:, sc_idx, :] = x_c
+            eq_data_local[:, sc_idx, :] = x_c
+
+        return eq_data_local, rho_su_local, R_hh_local
+
+    eq_data, rho_su, R_hh = _equalize_with_channel(h_ls_all)
+
+    # Turbo receiver: decision-directed channel re-estimation and second-pass equalization
+    if turbo_enable and mod_dict_data['num_bit'] > 1:
+        const_obj = mod_dict_data.get('constellation', None)
+        if const_obj is None:
+            const_obj = sn.mapping.Constellation("qam", inPar.num_bits_sym, trainable=False)
+        const_points = const_obj.points
+        if hasattr(const_points, "numpy"):
+            const_points = const_points.numpy()
+
+        turbo_iters_use = max(1, int(turbo_iters))
+        for _ in range(turbo_iters_use):
+            x_hat = np.zeros_like(eq_data)
+            for tx_idx in range(iNtx):
+                x_hat[tx_idx, :, :] = _hard_quantize_to_constellation(eq_data[tx_idx, :, :], const_points)
+
+            h_ls_data = np.zeros_like(h_ls_all)
+            for sc_idx in range(inPar.N_sc_use):
+                X = x_hat[:, sc_idx, :]  # iNtx x Ndata
+                R = rec_sym_data_all[:, sc_idx, :]  # num_rx x Ndata
+                XXH = X @ X.conj().T
+                eps = np.finfo(np.float32).eps * (1.0 + np.trace(XXH).real)
+                H = R @ X.conj().T @ np.linalg.inv(XXH + eps * np.eye(iNtx, dtype=np.complex64))
+                h_ls_data[:, :, sc_idx] = H.T
+
+            # Denoise/smooth via channel_estimation on full grid
+            for tx_idx in range(iNtx):
+                for rx_idx in range(num_rx):
+                    if h_ls_pilot_full is not None:
+                        w = float(np.clip(turbo_pilot_weight, 0.0, 1.0))
+                        h_ls_pilot_use = np.nan_to_num(h_ls_pilot_full[tx_idx, rx_idx, :], nan=0.0)
+                        h_ls_mix = w * h_ls_pilot_use + (1.0 - w) * h_ls_data[tx_idx, rx_idx, :]
+                    else:
+                        h_ls_mix = h_ls_data[tx_idx, rx_idx, :]
+                    h_ls_all[tx_idx, rx_idx, :] = channel_estimation(
+                        h_ls_mix,
+                        inPar.CP_len,
+                        inPar.N_fft,
+                        1,
+                        sigma_arr[rx_idx],
+                        ce_mode,
+                        dc_mask_half_width,
+                        dc_adaptive_threshold,
+                        n_taps_esprit,
+                    )
+
+            eq_data, rho_su, R_hh = _equalize_with_channel(h_ls_all)
 
     # equalization points are ready
     # calculate EVM
@@ -645,4 +823,6 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
 
         #SNR_est = estimate_SNR(pilot_freq, rec_sym_pilot_all, N_sc_use)
 
+    if return_channel_for_plot:
+        return ber_arr, SNR_guard, rho_avg_plot, evm_arr, R_hh, h_ls_pilot_full, h_ls_all, ce_mode
     return ber_arr, SNR_guard, rho_avg_plot, evm_arr, R_hh

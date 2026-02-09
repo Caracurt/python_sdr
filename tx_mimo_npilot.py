@@ -161,6 +161,7 @@ def create_data_frame(inPar : SysParUL):
     mod_dict_data['mapper'] = mapper
     mod_dict_data['demapper'] = demapper
     mod_dict_data['num_bit'] = inPar.num_bits_sym
+    mod_dict_data['constellation'] = constellation if inPar.num_bits_sym > 1 else None
     mod_dict_data['encoder'] = encoder
     mod_dict_data['decoder'] = decoder
     mod_dict_data['info_total'] = info_total
