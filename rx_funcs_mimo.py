@@ -23,6 +23,52 @@ from tx_mimo_npilot import create_data, create_preamble, create_data_frame, init
 from system_tx import SysParUL
 import json
 
+# DNN CE (CE_mode=6): lazy-loaded PyTorch model
+#DNN_CE_MODEL_PATH = "transformer_ce_best_2rx1tx.pt"
+DNN_CE_MODEL_PATH = "transformer_ce_best_cdl_channel_Hfr_2x1_ch0.pt"
+#DNN_CE_MODEL_PATH = "transformer_ce_best_2rx1tx_ch0.pt"
+#DNN_CE_MODEL_PATH = "transformer_ce_best_2rx1tx_ch1.pt"
+_dnn_ce_model = None
+_dnn_ce_device = None
+
+try:
+    import torch
+    from train_transformer_ce import TransformerCEDenoiser
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
+
+
+def _load_dnn_ce_model():
+    """Lazy-load the trained Transformer CE model (once)."""
+    global _dnn_ce_model, _dnn_ce_device
+    if _dnn_ce_model is not None:
+        return _dnn_ce_model, _dnn_ce_device
+    if not _TORCH_AVAILABLE:
+        raise RuntimeError("PyTorch not available; cannot use CE_mode=6")
+    ckpt = torch.load(DNN_CE_MODEL_PATH, map_location="cpu", weights_only=False)
+    cfg = ckpt.get("config", {})
+    model = TransformerCEDenoiser(
+        N_sc=cfg.get("N_sc", 64),
+        N_bs_ant=cfg.get("N_bs_ant", 2),
+        Nl=cfg.get("Nl", 12),
+        Nr=cfg.get("Nr", 24),
+        d_model=cfg.get("d_model", 4),
+        n_head=cfg.get("n_head", 1),
+        n_layers=cfg.get("n_layers", 1),
+        conv_kernel=cfg.get("conv_kernel", 3),
+        conv_padding=cfg.get("conv_padding", 1),
+        n_fft_pre=cfg.get("n_fft_pre", None),
+    )
+    model.load_state_dict(ckpt["model_state_dict"], strict=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device).eval()
+    _dnn_ce_model = model
+    _dnn_ce_device = device
+    print(f"[CE_mode=6] Loaded DNN model from {DNN_CE_MODEL_PATH}  "
+          f"(N_sc={cfg.get('N_sc')}, N_bs_ant={cfg.get('N_bs_ant')}, device={device})")
+    return _dnn_ce_model, _dnn_ce_device
+
 def calc_evm(dat_idl, dat_est):
     evm_c = 10.0 * np.log10( np.mean( np.abs(dat_idl.flatten())**2 )  / np.mean( np.abs(dat_idl.flatten() - dat_est.flatten())**2 )  )
     return evm_c
@@ -395,6 +441,150 @@ def channel_estimation(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_mode=0,
 
     return h_ls
 
+# joint rx CE function
+def channel_estimation_joint(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_mode=0):
+
+    N_sc_in = h_ls.shape[0]
+    Nrx = h_ls.shape[1]
+
+    # h_ls in Nsc x Nrx
+    h_ls = np.array(h_ls, dtype=np.complex64, copy=True)
+
+
+    # time domain conversion
+    h_time = np.fft.ifft(h_ls, N_fft, 0, norm='ortho')
+
+    # avaliable modes for joint CE
+    if ce_mode == 5:
+        # new code
+        # first find time shift
+
+
+        h_first = h_ls[:-2, :] # Nsc-1 x Nrx
+        h_second = h_ls[1:-1, :]
+
+        #avg_angle = np.angle( h_first.conj().T @ h_second )
+        avg_angle = np.mean(np.angle(np.diag(h_first.conj().T @ h_second)))
+
+        x_arr = np.arange(0, N_sc_in)
+        ta_comp = np.exp(1j * -avg_angle * x_arr )
+        ta_comp = ta_comp[..., np.newaxis]
+        ta_comp = np.tile(ta_comp, (1, Nrx))
+
+        ta_comp_inv = np.exp(1j * avg_angle * x_arr)
+        ta_comp_inv = ta_comp_inv[..., np.newaxis]
+        ta_comp_inv = np.tile(ta_comp_inv, (1, Nrx))
+
+        h_ls_ta = h_ls * ta_comp
+
+        A_dft = np.fft.fft(np.eye(N_fft, dtype=np.complex64), norm='ortho')
+        A_idft = A_dft[:N_sc_in, :].conj().T
+
+        h_time_check = A_idft @ h_ls_ta
+
+        if False:
+            plt.plot(range(len(h_time_check)), np.abs(h_time_check))
+            plt.show()
+
+        W_max = 3
+        W_min = 1
+
+        A_pdft_max = A_dft[:N_sc_in, :W_max]
+
+        if W_min > 0:
+            A_pdft_min = A_dft[:N_sc_in, -W_min:]
+            A_pdft_join = np.hstack((A_pdft_max, A_pdft_min))
+        else:
+            A_pdft_join = A_pdft_max
+
+        # SVD transformation
+        if False:
+
+            # SVD
+            U_c, S_c, V_c = np.linalg.svd(A_pdft_join, full_matrices=True)
+
+            n_take = W_max + W_min
+            U_c = U_c[:, :n_take]
+
+            A_pdft_join = U_c
+
+
+        R_cov_tt = A_pdft_join.conj().T @ A_pdft_join
+
+        if False:
+            pdp_est = A_pdft_join.conj().T @ h_ls_ta
+            eta_fact = 1.0
+            pdp_power = np.abs(pdp_est[:, 0]) ** 2
+            eps = np.finfo(np.complex64).eps * (1.0 + np.max(pdp_power))
+            D_snr = np.diag((eta_fact * sigma_0 / (pdp_power + eps)).astype(np.float32)).astype(np.complex64)
+            R_cov_tt = R_cov_tt + D_snr
+
+        W_ce = A_pdft_join @ np.linalg.inv(R_cov_tt) @ A_pdft_join.conj().T
+
+        h_ce_rez = W_ce @ h_ls_ta
+
+        h_ce_out = h_ce_rez[:, :] * ta_comp_inv
+
+        if False:
+            fig1, ax1 = plt.subplots()
+            ax1.plot(range(N_sc_in), h_ce_out, label='CEout')
+            ax1.plot(range(N_sc_in), h_ls, label='CEin')
+            ax1.grid()
+            ax1.legend()
+            plt.show()
+
+        return h_ce_out
+
+    elif ce_mode == 6:
+        model, device = _load_dnn_ce_model()
+
+        # preprocessing step
+        h_first = h_ls[:-2, :]  # Nsc-1 x Nrx
+        h_second = h_ls[1:-1, :]
+
+        # avg_angle = np.angle( h_first.conj().T @ h_second )
+        avg_angle = np.mean(np.angle(np.diag(h_first.conj().T @ h_second)))
+
+        x_arr = np.arange(0, N_sc_in)
+        ta_comp = np.exp(1j * -avg_angle * x_arr)
+        ta_comp = ta_comp[..., np.newaxis]
+        ta_comp = np.tile(ta_comp, (1, Nrx))
+
+        ta_comp_inv = np.exp(1j * avg_angle * x_arr)
+        ta_comp_inv = ta_comp_inv[..., np.newaxis]
+        ta_comp_inv = np.tile(ta_comp_inv, (1, Nrx))
+
+        h_ls_ta = h_ls * ta_comp
+
+        SNR_t = 14
+        eta_val = np.sqrt( 2**(-12) * 10**(SNR_t/10) / sigma_0 )
+        #eta_val = 0.01
+        h_ls_preproc = h_ls * eta_val
+
+        h_in = torch.from_numpy(h_ls_preproc.astype(np.complex64)).unsqueeze(0).to(device)  # (1, Nsc, Nrx)
+        with torch.no_grad():
+            h_out = model(h_in)  # (1, Nsc, Nrx) complex
+        #return h_out.cpu().numpy().squeeze(0).astype(np.complex64) * ta_comp_inv  # (Nsc, Nrx)
+        h_nn_out = h_out.cpu().numpy().squeeze(0).astype(np.complex64)
+
+        h_nn_out = h_nn_out / eta_val
+
+        plt.plot(range(len(h_nn_out)), np.real(h_nn_out[:, 0]), label='DNN')
+        plt.plot(range(len(h_nn_out)), np.real(h_ls[:, 0]), label='LS')
+        plt.legend()
+        plt.grid()
+        plt.show()
+
+
+        return h_nn_out
+
+    elif ce_mode == 7:
+        return h_ls
+    else:
+        return h_ls
+
+
+
 
 def estimate_SNR(pilot_freq, rec_sym_pilot, N_sc_use):
     Es_freq = 0.0
@@ -553,6 +743,8 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
 
         ls_len = int(inPar.N_sc_use/comb_step)
 
+        h_ls_rx_joint = np.zeros((inPar.N_sc_use//comb_step, num_rx), dtype=np.complex64)
+
         for rx_idx in range(num_rx):
 
             h_ls_rep = np.zeros( (inPar.pilot_repeat, num_rx, ls_len), dtype=np.complex64 )
@@ -578,7 +770,17 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
             if h_ls_pilot_full is not None:
                 h_ls_pilot_full[tx_idx, rx_idx, comb_start::comb_step] = h_ls
 
-            h_ls_all[tx_idx, rx_idx, :] = channel_estimation(h_ls, inPar.CP_len, inPar.N_fft, comb_step, sigma_arr[rx_idx], ce_mode, dc_mask_half_width, dc_adaptive_threshold, n_taps_esprit) if inPar.do_ce else h_ls
+            h_ls_rx_joint[:, rx_idx] = h_ls # store LS CE
+
+            # separate CE mode
+            if ce_mode <= 4:
+                h_ls_all[tx_idx, rx_idx, :] = channel_estimation(h_ls, inPar.CP_len, inPar.N_fft, comb_step, sigma_arr[rx_idx], ce_mode, dc_mask_half_width, dc_adaptive_threshold, n_taps_esprit) if inPar.do_ce else h_ls
+
+        # joint Rx ant CE mode
+        if ce_mode >= 5:
+            h_est = channel_estimation_joint(h_ls_rx_joint, inPar.CP_len, inPar.N_fft, comb_step,
+                                                             sigma_arr[rx_idx], ce_mode)
+            h_ls_all[tx_idx, :, :] = h_est.T
 
         # Interference covariance from pilot residuals; exclude DC columns so spike does not inflate Ruu
         for rep_idx in range(inPar.pilot_repeat):

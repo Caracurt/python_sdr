@@ -5,11 +5,13 @@ OFDM demodulation, sync, and CFO correction are unchanged; only CE and equalizat
 
 Channel estimation improvements (in rx_funcs_mimo):
   - ce_mode: 0=time-window IFFT/FFT, 1=DFT-based, 2=DFT+MMSE reg, 3=DFT+SVD+MMSE.
+  - CE_mode=4: ESPRIT super-resolution (exact delay taps) + MMSE projection; n_taps_esprit = number of taps.
+  - CE_mode=5: joint Rx-antenna DFT-based CE.
+  - CE_mode=6: joint Rx-antenna DNN (Transformer) CE — loads transformer_ce_best_2rx1tx.pt.
   - Adaptive DC: dc_adaptive_threshold > 0 + dc_mask_half_width > 0 → interpolate DC region only when
     DC power exceeds threshold × median(other subcarriers); avoids BER loss when no spike present.
   - exclude_dc_from_ruu: exclude DC bin from pilot residual when computing Ruu (stops spike inflating noise cov).
   - robust_pilot_avg: median over pilot repeats instead of mean (reduces outlier pilot symbols).
-  - CE_mode=4: ESPRIT super-resolution (exact delay taps) + MMSE projection; n_taps_esprit = number of taps.
 """
 import re
 import pickle
@@ -38,13 +40,13 @@ from system_tx import SysParUL
 import json
 
 # (mimo_mode, label): mimo_mode digits = [CE_mode*100] + [SMMSE_mode*10] + MIMO_det (e.g. 102 = CE=1, MIMO=2)
-cfg_test = [(102, 'MMSE_rep4'), (2, 'MMSE_rep4')]
+cfg_test = [(502, 'MMSE_rep4'), (602, 'DNN_joint_rep4')]
 # DC handling: adaptive avoids BER loss when no spike; excluding DC from Ruu often helps most
-CE_DC_MASK_HALF_WIDTH = 0       # width for DC interpolation when adaptive triggers (0=no CE DC correction)
+CE_DC_MASK_HALF_WIDTH = 1       # width for DC interpolation when adaptive triggers (0=no CE DC correction)
 CE_DC_ADAPTIVE_THRESHOLD = 3.0   # 0=off. If DC power > this × median(other), interpolate DC region
 EXCLUDE_DC_FROM_RUU = True       # exclude DC bin from pilot residual when computing Ruu (recommended)
 CE_ROBUST_PILOT_AVG = False      # True = median over pilot repeats (robust to outlier pilots)
-N_TAPS_ESPRIT = 2               # CE_mode=4: number of delay taps estimated by ESPRIT (super-resolution)
+N_TAPS_ESPRIT = 1            # CE_mode=4: number of delay taps estimated by ESPRIT (super-resolution)
 PLOT_CHANNEL_FREQ = False         # plot frequency channel before CE (LS, comb) vs after CE (with legend CE_mode)
 TURBO_ENABLE = False             # Turbo receiver: decision-directed channel refinement
 TURBO_ITERS = 1                  # Number of turbo refinement iterations
