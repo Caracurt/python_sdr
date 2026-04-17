@@ -3,11 +3,26 @@ import time
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
-import numpy.matlib
+import sounddevice as sd
+import soundfile as sf
+import matplotlib.pyplot as plt
+from scipy import signal
 
-sample_rate = 1e6 # Hz
+
+# get audio
+filename = '01-We-Die-Young.wav'
+data, fs = sf.read(filename)
+
+N_plot = 4096 * 400
+
+up_s = 10
+sdr_samp_rate = fs * up_s
+
+# end get audio
+sample_rate = sdr_samp_rate # Hz
+
 center_freq = 2.0e9 # Hz
-FrameSize = 128
+FrameSize = int(N_plot * 1.4)
 
 # Tx
 # sdr = adi.ad9363(uri='ip:192.168.1.1')
@@ -40,8 +55,8 @@ tx_lo = rx_lo
 tx_gain0 = 0
 tx_gain1 = 0
 
-sdr.rx_enabled_channels = [0, 1]
-#sdr.rx_enabled_channels = [0]
+#sdr.rx_enabled_channels = [0, 1]
+sdr.rx_enabled_channels = [0]
 sdr.sample_rate = int(samp_rate)
 sdr.rx_lo = int(rx_lo)
 sdr.gain_control_mode = rx_mode
@@ -60,37 +75,44 @@ samples *= 2**14 # The PlutoSDR expects samples to be between -2^14 and +2^14, n
 # Transmit our batch of samples 100 times, so it should be 1 second worth of samples total, if USB can keep up
 
 #while True:
-Ntrial = 10
+Ntrial = 2
 for i in range(Ntrial):
     data = sdr.rx()
 
-    data = np.array(data) # Nrx x Nsamples
+    # data = np.array(data) # Nrx x Nsamples
+    #
+    # pdp = np.fft.fft(data, axis=1, norm='ortho')
+    #
+    # pdp_avg = np.mean(np.abs(pdp)**2, axis=0)
+    #
+    # # noise est
+    # n_left = int(0.5 * FrameSize)
+    # n_right = int(0.7 * FrameSize)
+    #
+    # noise_win = pdp[:, n_left:n_right]
+    # sigma0 = np.mean(np.abs(noise_win)**2, axis=1)
+    #
+    # pos_max = np.argmax(pdp_avg)
+    #
+    # SNR_rx = 10.0 * np.log10(np.abs(pdp[:, pos_max]) ** 2 / sigma0)
+    #
+    # print(f'SNR_rx0: {SNR_rx[0] : .2f} SNR_rx1: {SNR_rx[1] : .2f}')
+    #
+    # print(f'Freq Decode = {pos_max}')
+    #
+    #
+    # plt.plot(range(len(pdp_avg)), pdp_avg)
+    # plt.grid()
+    # plt.show()
 
-    pdp = np.fft.fft(data, axis=1, norm='ortho')
+    data = np.array(data)
 
-    pdp_avg = np.mean(np.abs(pdp)**2, axis=0)
+    phase_rx = np.angle(data[1:] * np.conj(data[0:-1]))
 
-    # noise est
-    n_left = int(0.5 * FrameSize)
-    n_right = int(0.7 * FrameSize)
+    data_cut_down1 = signal.resample_poly(phase_rx, 1, up_s)
 
-    noise_win = pdp[:, n_left:n_right]
-    sigma0 = np.mean(np.abs(noise_win)**2, axis=1)
-
-    pos_max = np.argmax(pdp_avg)
-
-    SNR_rx = 10.0 * np.log10(np.abs(pdp[:, pos_max]) ** 2 / sigma0)
-
-    print(f'SNR_rx0: {SNR_rx[0] : .2f} SNR_rx1: {SNR_rx[1] : .2f}')
-
-    print(f'Freq Decode = {pos_max}')
-
-
-    plt.plot(range(len(pdp_avg)), pdp_avg)
-    plt.grid()
-    plt.show()
-
-
+    sd.play(data_cut_down1, fs)
+    sd.wait()
 
 
 
