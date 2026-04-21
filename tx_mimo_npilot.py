@@ -238,7 +238,7 @@ def main():
     else:
         repeated_frame_tx = repeated_frame[:, 0]
 
-    tx_gain0 = 0
+    tx_gain0 = -20
 
     if not inPar.dummyTx:
         #sdr = adi.Pluto('ip:192.168.3.3') # interfere cfg
@@ -272,11 +272,12 @@ def main():
             rx_gain0 = 70
             rx_gain1 = 70
             tx_lo = rx_lo
-            tx_gain0 = 0
-            tx_gain1 = 0
+            #tx_gain0 = 0
+            tx_gain1 = tx_gain0
 
 
             sdr.tx_enabled_channels = list(range(inPar.Ntx))
+            #sdr.tx_enabled_channels = list(range(2))
             #sdr.rx_enabled_channels = [0]
             sdr.sample_rate = int(inPar.sample_rate)
             sdr.rx_lo = int(rx_lo)
@@ -298,7 +299,7 @@ def main():
             tmp_arr1 = tmp_arr.flatten()
             max_el = max(np.abs(np.hstack( (np.real(tmp_arr1), np.imag(tmp_arr1)))) )
 
-            scale = (1.0 / max_el) * 2**(15)
+            scale = (1.0 / max_el) * 2**(14)
 
             #sdr.tx(repeated_frame_tx * 10024.0)
             sdr.tx(repeated_frame_tx * scale)

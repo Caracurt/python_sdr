@@ -33,8 +33,8 @@ sdr.sample_rate = int(sample_rate)
 sdr.tx_rf_bandwidth = int(sample_rate) # filter cutoff, just set it to the same as sample rate
 sdr.tx_lo = int(center_freq)
 #sdr.tx_hardwaregain_chan0 = -50 # Increase to increase tx power, valid range is -90 to 0 dB
-tx_gain0 = 0
-tx_gain1 = 0
+tx_gain0 = -10
+tx_gain1 = -10
 #
 #sdr = adi.ad9363(uri='ip:192.168.1.1')
 sdr.tx_enabled_channels = list(range(1))

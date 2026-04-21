@@ -6,6 +6,10 @@ import numpy as np
 import random
 import threading
 import time
+import pickle
+from pathlib import Path
+from collections import deque
+from datetime import datetime
 
 # imports related to Radio Tx/Rx
 
@@ -45,11 +49,13 @@ if not inPar.dummyRx:
     do_load_file = False # should be False
     do_save = False
 
-    sdr = adi.ad9361(uri='ip:192.168.2.2')
+    sdr = adi.ad9361(uri='ip:192.168.2.2') # eth 192.168.1.10 , usb 192.168.2.2
+    #sdr = adi.ad9361(uri='ip:192.168.1.1')
     samp_rate = inPar.sample_rate  # must be <=30.72 MHz if both channels are enabled
     num_samps = len(repeated_frame) * 1  # number of samples per buffer.  Can be different for Rx and Tx
     rx_lo = int(inPar.center_freq)
-    rx_mode = "slow_attack"  # can be "manual" or "slow_attack"
+    #rx_mode = "slow_attack"  # can be "manual" or "slow_attack"
+    rx_mode = "slow_attack"
     rx_gain0 = 70
     rx_gain1 = 70
     tx_lo = rx_lo
@@ -64,6 +70,7 @@ if not inPar.dummyRx:
     sdr.rx_hardwaregain_chan0 = int(rx_gain0)
     sdr.rx_hardwaregain_chan1 = int(rx_gain1)
     sdr.rx_buffer_size = int(num_samps)
+    sdr_lock = threading.Lock()
 
 
 # end of global params
@@ -105,6 +112,11 @@ class RxGUI:
 
         # Create GUI elements
         self.setup_ui()
+        self.apply_rx_lo_from_ui()
+
+        # Keep last 10 raw baseband frames for dumping (rx_dump_mimo compatible)
+        self._frames_lock = threading.Lock()
+        self._last_frames = deque(maxlen=10)
 
         # Start sensor simulation thread
         self.running = True
@@ -150,6 +162,39 @@ class RxGUI:
         
         # Make text box read-only
         self.avg_text.config(state=tk.DISABLED)
+
+        # Dump last frames (raw baseband) for rx_dump_mimo.py
+        dump_frame = ttk.LabelFrame(right_frame, text="Dump baseband")
+        dump_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+        self.dump_btn = ttk.Button(
+            dump_frame,
+            text="Dump last 10 frames",
+            command=self.dump_last_10_frames,
+        )
+        self.dump_btn.pack(side=tk.TOP, padx=5, pady=5, fill=tk.X)
+        self.dump_status_lbl = ttk.Label(dump_frame, text="", wraplength=220)
+        self.dump_status_lbl.pack(side=tk.TOP, padx=5, pady=(0, 5), fill=tk.X)
+
+        # RX LO frequency selection
+        lo_frame = ttk.LabelFrame(right_frame, text="RX LO frequency")
+        lo_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+        self.rx_lo_var = tk.IntVar(value=2_000_000_000)
+        rb_rx_2g = ttk.Radiobutton(
+            lo_frame,
+            text="2.0 GHz (default)",
+            variable=self.rx_lo_var,
+            value=2_000_000_000,
+            command=self.apply_rx_lo_from_ui,
+        )
+        rb_rx_409m = ttk.Radiobutton(
+            lo_frame,
+            text="409 MHz",
+            variable=self.rx_lo_var,
+            value=409_000_000,
+            command=self.apply_rx_lo_from_ui,
+        )
+        rb_rx_2g.pack(side=tk.TOP, padx=5, pady=2, anchor=tk.W)
+        rb_rx_409m.pack(side=tk.TOP, padx=5, pady=2, anchor=tk.W)
 
         # Create radio buttons for MIMO detection mode
         mimo_frame = ttk.LabelFrame(right_frame, text="MIMO Detection Mode")
@@ -224,6 +269,16 @@ class RxGUI:
             command=self.ce_mode_changed
         )
         ce_mode_1.pack(side=tk.TOP, padx=5, pady=2)
+
+        # DNN CE (Transformer) joint Rx-antenna mode. Internally maps to CE_mode=6 in rx_funcs_mimo.
+        ce_mode_2 = ttk.Radiobutton(
+            ce_frame,
+            text="CE Mode 2 (DNN_joint_rep4)",
+            variable=self.ce_mode_var,
+            value=2,
+            command=self.ce_mode_changed
+        )
+        ce_mode_2.pack(side=tk.TOP, padx=5, pady=2)
 
         # Create EVM trial section
         evm_trial_frame = ttk.LabelFrame(right_frame, text="EVM Trial")
@@ -333,7 +388,10 @@ class RxGUI:
 
     def ce_mode_changed(self):
         """Handle channel estimation mode change"""
-        self.ce_mode = self.ce_mode_var.get()
+        ce_ui = self.ce_mode_var.get()
+        # Keep UI numbering stable while using the existing rx pipeline mapping:
+        # CE_mode=6 is the joint DNN (Transformer) channel estimator.
+        self.ce_mode = 6 if ce_ui == 2 else ce_ui
         # The change will take effect on the next sensor reading
 
     def metric_changed(self):
@@ -464,7 +522,16 @@ class RxGUI:
                 data = data_rx_dummy
             else:
                 # actual SDR transmission
-                data = sdr.rx()
+                with sdr_lock:
+                    data = sdr.rx()
+
+            # Store raw frames for dumping (same list-of-np.array format as rx_mimo_plot_npilot.py)
+            try:
+                frame_arr = np.array(data)
+                with self._frames_lock:
+                    self._last_frames.append(frame_arr)
+            except Exception:
+                pass
 
             ber_c, snr_c, rho_avg_plot, evm_arr, Rhh_c = receiver_MIMO_v2(data, self.mimo_mode, inPar.Ntx, pilot_rep_use, ce_mode=self.ce_mode, smmse_mode=self.smmse_mode)
 
@@ -492,6 +559,37 @@ class RxGUI:
 
             self.counter += 1
             time.sleep(0.3)  # Simulate 0.1 second delay
+
+    def apply_rx_lo_from_ui(self):
+        if inPar.dummyRx:
+            return
+        hz = int(self.rx_lo_var.get())
+        with sdr_lock:
+            sdr.rx_lo = hz
+
+    def dump_last_10_frames(self):
+        """Dump last buffered raw baseband frames to timestamped pickle file.
+
+        Format matches rx_mimo_plot_npilot.py dumping: a list of np.array frames (each frame is sdr.rx()).
+        This is compatible with rx_dump_mimo.py's pickle loading.
+        """
+        with self._frames_lock:
+            frames = list(self._last_frames)
+        if len(frames) == 0:
+            self.dump_status_lbl.config(text="No frames buffered yet.")
+            return
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = Path(f"dump_last_10_frames_{ts}.pkl")
+        try:
+            with out_path.open("wb") as dump_fd:
+                pickle.dump(frames, dump_fd)
+            msg = f"Saved {len(frames)} frames: {out_path}"
+            if len(frames) < 10:
+                msg = f"Saved {len(frames)}/10 frames: {out_path}"
+            self.dump_status_lbl.config(text=msg)
+        except Exception as e:
+            self.dump_status_lbl.config(text=f"Dump failed: {e}")
 
     def on_closing(self):
         self.running = False

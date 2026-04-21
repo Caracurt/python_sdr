@@ -67,7 +67,7 @@ cfo_glob_dummy = 0.001
 #cfo_glob_dummy = 0.000
 
 #metrics_to_plot = ['SNR_guard', 'EVM', 'BER']
-metrics_to_plot = ['BER', 'EVM']
+metrics_to_plot = ['BER', 'EVM', 'SNR_guard']
 
 num_subplots = len(metrics_to_plot)
 
@@ -908,7 +908,7 @@ def update(frame1):
                 y1 = np.append(y1, snr_c)
             elif metrics_to_plot[p_idx] == 'EVM':
                 evm_plot = np.mean(evm_arr)
-                evm_thr = 7.0
+                evm_thr = 30.0
                 if evm_plot > evm_thr:
                     evm_plot = evm_thr
                 #y1 = np.append(y1, evm_plot)
@@ -985,7 +985,7 @@ def init():
             ax[p_idx].set_xlabel('Time')
             ax[p_idx].set_ylabel(f'EVM')
             ax[p_idx].set_xlim(0, NUM_FRAMES)
-            ax[p_idx].set_ylim(-5, 9.0)
+            ax[p_idx].set_ylim(-5, 30.0)
         elif metrics_to_plot[p_idx] == "BER":
             ax[p_idx].set_xlabel('Time')
             ax[p_idx].set_ylabel(f'BER@QAM{2**inPar.num_bits_sym}')
