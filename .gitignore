@@ -10,3 +10,6 @@ test_gui.py
 test_gui2.py
 test_gui3.py
 __pycache__/tx_mimo_npilot.cpython-311.pyc
+__pycache__/rx_funcs_mimo.cpython-311.pyc
+__pycache__/system_tx.cpython-311.pyc
+__pycache__/tx_mimo_npilot.cpython-311.pyc

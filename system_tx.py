@@ -32,7 +32,7 @@ class SysParUL:
         self.N_sc_use = int(self.N_fft * self.frac_guard)
         self.guard_length = int(0.5 * self.N_fft)
         self.CP_len = int(self.N_fft * 0.2)
-        self.num_bits_sym = 8
+        self.num_bits_sym = 2
         self.BlockSize = self.N_sc_use * self.num_bits_sym
 
         self.T_prec = np.fft.ifft(np.eye(self.N_sc_use, dtype=np.complex64), norm='ortho')

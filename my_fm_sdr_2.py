@@ -1,4 +1,4 @@
-# FM radio receiver via SDR (AD9361): real-time receive -> FM demod -> LPF+decimate -> audio
+    # FM radio receiver via SDR (AD9361): real-time receive -> FM demod -> LPF+decimate -> audio
 # Target: 36.5 MHz. Play for DURATION_SEC using producer-consumer audio.
 import argparse
 import queue
@@ -23,7 +23,7 @@ fc = 2e9
 up_s = 10
 
 # --- Parameters (overridable via argparse) ---
-DURATION_SEC = 60
+DURATION_SEC = 600
 oversampling = up_s
 cut_off_hz = 15_000
 
