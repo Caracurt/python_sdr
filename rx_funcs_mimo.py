@@ -569,11 +569,12 @@ def channel_estimation_joint(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_m
 
         h_nn_out = h_nn_out / eta_val
 
-        plt.plot(range(len(h_nn_out)), np.real(h_nn_out[:, 0]), label='DNN')
-        plt.plot(range(len(h_nn_out)), np.real(h_ls[:, 0]), label='LS')
-        plt.legend()
-        plt.grid()
-        plt.show()
+        if False:
+            plt.plot(range(len(h_nn_out)), np.real(h_nn_out[:, 0]), label='DNN')
+            plt.plot(range(len(h_nn_out)), np.real(h_ls[:, 0]), label='LS')
+            plt.legend()
+            plt.grid()
+            plt.show()
 
 
         return h_nn_out

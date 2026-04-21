@@ -87,7 +87,9 @@ def plot_channel_freq(h_ls_before_full, h_ce, ce_mode, frame_idx=0, rec_name='')
 # path to dataset
 #DUMP_FILE = Path("dump_last_10_frames_2GHZ_40m_chair.pkl")
 #DUMP_FILE_list = [Path("dump_last_10_frames_p1.pkl"), Path("dump_last_10_frames_p2.pkl")]
-DUMP_FILE_list = [Path("dump_last_10_frames_pp1.pkl"), Path("dump_last_10_frames_pp2.pkl")]
+#DUMP_FILE_list = [Path("dump_last_10_frames_pp1.pkl"), Path("dump_last_10_frames_pp2.pkl")] # set QAM256 in sys cfg
+
+DUMP_FILE_list = [Path("dump_last_10_frames_20260421_124438.pkl")]
 
 preloaded_frames = list()
 for DUMP_FILE in DUMP_FILE_list:
