@@ -737,12 +737,15 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
     Ruu = np.zeros((num_rx, num_rx), dtype=np.complex64)
 
     # CE part
+    comb_step = iNtx
+    ls_len = int(inPar.N_sc_use / comb_step)
+
+    # create tensor for H_ls
+    h_ls_rep_out = np.zeros((iNtx, num_rx, inPar.pilot_repeat, ls_len), dtype=np.complex64)
+
     for tx_idx in range(iNtx):
 
         comb_start = tx_idx
-        comb_step = iNtx
-
-        ls_len = int(inPar.N_sc_use/comb_step)
 
         h_ls_rx_joint = np.zeros((inPar.N_sc_use//comb_step, num_rx), dtype=np.complex64)
 
@@ -758,6 +761,8 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
                 h_ls = rec_sym_pilot[comb_start::comb_step] / pilot_tx[tx_idx][comb_start::comb_step, 0]
 
                 h_ls_rep[rep_idx, rx_idx, :] = h_ls
+
+                h_ls_rep_out[tx_idx, rx_idx, rep_idx, :] = h_ls
 
             # LS average over pilot repeats (mean or robust median)
             if robust_pilot_avg and pilot_rep_use > 1:
@@ -1028,4 +1033,4 @@ def receiver_MIMO_v2(data, mimo_mode_in, iNtx, pilot_rep_use=1, ce_mode=None, sm
 
     if return_channel_for_plot:
         return ber_arr, SNR_guard, rho_avg_plot, evm_arr, R_hh, h_ls_pilot_full, h_ls_all, ce_mode
-    return ber_arr, SNR_guard, rho_avg_plot, evm_arr, R_hh
+    return ber_arr, SNR_guard, rho_avg_plot, evm_arr, R_hh, h_ls_rep_out

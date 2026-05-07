@@ -53,6 +53,10 @@ TURBO_ITERS = 1                  # Number of turbo refinement iterations
 TURBO_PILOT_WEIGHT = 0.5         # Weight for pilot LS vs data-aided LS in turbo CE (0..1)
 Ntx = 1
 
+# dump file name
+DUMP_FILE_list = [Path("dump_last_10_frames_2GHZ_40m_chair.pkl")]
+
+plot_time_domain = True
 
 def plot_channel_freq(h_ls_before_full, h_ce, ce_mode, frame_idx=0, rec_name=''):
     """Plot frequency channel: before CE (LS on pilot subcarriers only) vs after CE (full)."""
@@ -89,7 +93,7 @@ def plot_channel_freq(h_ls_before_full, h_ce, ce_mode, frame_idx=0, rec_name='')
 #DUMP_FILE_list = [Path("dump_last_10_frames_p1.pkl"), Path("dump_last_10_frames_p2.pkl")]
 #DUMP_FILE_list = [Path("dump_last_10_frames_pp1.pkl"), Path("dump_last_10_frames_pp2.pkl")] # set QAM256 in sys cfg
 
-DUMP_FILE_list = [Path("dump_last_10_frames_20260421_124438.pkl")]
+
 
 preloaded_frames = list()
 for DUMP_FILE in DUMP_FILE_list:
@@ -144,7 +148,7 @@ for preloaded_frame_idx in range(len(preloaded_frames)):
             if preloaded_frame_idx == 0:
                 plot_channel_freq(h_ls_before_full, h_ce_full, ce_mode_used, frame_idx=0, rec_name=rec_name)
         else:
-            ber_c, snr_c, rho_avg_plot, evm_arr, Rhh = receiver_MIMO_v2(
+            ber_c, snr_c, rho_avg_plot, evm_arr, Rhh, h_ls_tensor = receiver_MIMO_v2(
                 data, mimo, Ntx, pilot_rep_use,
                 dc_mask_half_width=CE_DC_MASK_HALF_WIDTH,
                 dc_adaptive_threshold=CE_DC_ADAPTIVE_THRESHOLD,
@@ -155,6 +159,27 @@ for preloaded_frame_idx in range(len(preloaded_frames)):
                 turbo_iters=TURBO_ITERS,
                 turbo_pilot_weight=TURBO_PILOT_WEIGHT,
             )
+
+            if plot_time_domain:
+                Ntx_c, Nrx_c , Npil_c, Nls_c = h_ls_tensor.shape
+
+                h_ls_avg = np.mean(h_ls_tensor, axis=2)
+
+                Nfft = int(2**(np.ceil(np.log2(Nls_c))))
+                h_time = np.fft.ifft(h_ls_avg, axis=-1)
+
+                pdp_time = np.mean(np.abs(h_time)**2, axis=(0,1))
+
+                fig, ax = plt.subplots()
+                ax.plot(range(Nfft), pdp_time, label=f'tti={preloaded_frame_idx}')
+                ax.set_xlabel('Time idx iFFT')
+                ax.set_ylabel('PDP')
+                ax.grid()
+                plt.legend()
+                plt.show()
+
+                pass
+
 
         Rhh_list.append(Rhh)
 

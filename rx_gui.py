@@ -533,7 +533,7 @@ class RxGUI:
             except Exception:
                 pass
 
-            ber_c, snr_c, rho_avg_plot, evm_arr, Rhh_c = receiver_MIMO_v2(data, self.mimo_mode, inPar.Ntx, pilot_rep_use, ce_mode=self.ce_mode, smmse_mode=self.smmse_mode)
+            ber_c, snr_c, rho_avg_plot, evm_arr, Rhh_c, h_ls_tensor = receiver_MIMO_v2(data, self.mimo_mode, inPar.Ntx, pilot_rep_use, ce_mode=self.ce_mode, smmse_mode=self.smmse_mode)
 
             new_SNR_guard = snr_c
             new_BER = np.mean(np.array(ber_c).flatten())
