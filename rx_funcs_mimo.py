@@ -70,7 +70,10 @@ def _load_dnn_ce_model():
     return _dnn_ce_model, _dnn_ce_device
 
 def calc_evm(dat_idl, dat_est):
-    evm_c = 10.0 * np.log10( np.mean( np.abs(dat_idl.flatten())**2 )  / np.mean( np.abs(dat_idl.flatten() - dat_est.flatten())**2 )  )
+    #evm_c = 10.0 * np.log10( np.mean( np.abs(dat_idl.flatten())**2 )  / np.mean( np.abs(dat_idl.flatten() - dat_est.flatten())**2 )  )
+
+    evm_c = 10.0 * np.mean( np.log10(
+        np.abs(dat_idl.flatten()) ** 2 / np.abs(dat_idl.flatten() - dat_est.flatten()) ** 2 ) )
     return evm_c
 
 
@@ -450,12 +453,13 @@ def channel_estimation_joint(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_m
     # h_ls in Nsc x Nrx
     h_ls = np.array(h_ls, dtype=np.complex64, copy=True)
 
+    #N_fft = 324
 
     # time domain conversion
     h_time = np.fft.ifft(h_ls, N_fft, 0, norm='ortho')
 
     # avaliable modes for joint CE
-    if ce_mode == 5:
+    if (ce_mode == 5) or (ce_mode == 7)  :
         # new code
         # first find time shift
 
@@ -486,8 +490,18 @@ def channel_estimation_joint(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_m
             plt.plot(range(len(h_time_check)), np.abs(h_time_check))
             plt.show()
 
-        W_max = 3
-        W_min = 1
+        # W_max = 7
+        # W_min = 3
+
+        if (ce_mode == 5):
+            W_max = 3
+            W_min = 1
+        else:
+            W_max = 3 * 4
+            W_min = 1 * 4
+
+        #W_max = 3
+        #W_min = 1
 
         A_pdft_max = A_dft[:N_sc_in, :W_max]
 
@@ -504,6 +518,7 @@ def channel_estimation_joint(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_m
             U_c, S_c, V_c = np.linalg.svd(A_pdft_join, full_matrices=True)
 
             n_take = W_max + W_min
+            #n_take = 14
             U_c = U_c[:, :n_take]
 
             A_pdft_join = U_c
@@ -513,9 +528,9 @@ def channel_estimation_joint(h_ls, CP_len, N_fft, comb_step=1, sigma_0=0.0, ce_m
 
         if False:
             pdp_est = A_pdft_join.conj().T @ h_ls_ta
-            eta_fact = 1.0
-            pdp_power = np.abs(pdp_est[:, 0]) ** 2
-            eps = np.finfo(np.complex64).eps * (1.0 + np.max(pdp_power))
+            eta_fact = 0.0
+            pdp_power = np.mean(  np.abs(pdp_est[:, :]) ** 2, axis=1)
+            eps = np.finfo(np.complex64).eps * (1.0 + np.max(pdp_power)) * 0.0
             D_snr = np.diag((eta_fact * sigma_0 / (pdp_power + eps)).astype(np.float32)).astype(np.complex64)
             R_cov_tt = R_cov_tt + D_snr
 

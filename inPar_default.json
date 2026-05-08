@@ -1,6 +1,6 @@
 {
   "description" : "Transmitter config",
-  "sample_rate" : 5e6,
+  "sample_rate" : 20e6,
   "center_freq" : 2.0e9,
   "device_type" : "ANTsdr",
   "Ntx" : 1,

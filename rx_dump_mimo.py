@@ -40,13 +40,16 @@ from system_tx import SysParUL
 import json
 
 # (mimo_mode, label): mimo_mode digits = [CE_mode*100] + [SMMSE_mode*10] + MIMO_det (e.g. 102 = CE=1, MIMO=2)
-cfg_test = [(502, 'MMSE_rep4'), (602, 'DNN_joint_rep4')]
+#cfg_test = [(502, 'MMSE_rep4'), (602, 'DNN_joint_rep4')]
+cfg_test = [(502, 'MMSE_CS_W4'), (702, 'MMSE_CS_W12'), (102, 'MMSE_HW')]
+
+
 # DC handling: adaptive avoids BER loss when no spike; excluding DC from Ruu often helps most
 CE_DC_MASK_HALF_WIDTH = 1       # width for DC interpolation when adaptive triggers (0=no CE DC correction)
 CE_DC_ADAPTIVE_THRESHOLD = 3.0   # 0=off. If DC power > this × median(other), interpolate DC region
 EXCLUDE_DC_FROM_RUU = True       # exclude DC bin from pilot residual when computing Ruu (recommended)
 CE_ROBUST_PILOT_AVG = False      # True = median over pilot repeats (robust to outlier pilots)
-N_TAPS_ESPRIT = 1            # CE_mode=4: number of delay taps estimated by ESPRIT (super-resolution)
+N_TAPS_ESPRIT = 1           # CE_mode=4: number of delay taps estimated by ESPRIT (super-resolution)
 PLOT_CHANNEL_FREQ = False         # plot frequency channel before CE (LS, comb) vs after CE (with legend CE_mode)
 TURBO_ENABLE = False             # Turbo receiver: decision-directed channel refinement
 TURBO_ITERS = 1                  # Number of turbo refinement iterations
@@ -54,7 +57,18 @@ TURBO_PILOT_WEIGHT = 0.5         # Weight for pilot LS vs data-aided LS in turbo
 Ntx = 1
 
 # dump file name
-DUMP_FILE_list = [Path("dump_last_10_frames_2GHZ_40m_chair.pkl")]
+
+#DUMP_FILE_list = [Path("dump_last_10_frames_20260507_132204.pkl")] # callibration radio point
+#DUMP_FILE_list = [Path("dump_last_10_frames_20260507_134059.pkl")] # shater
+#DUMP_FILE_list = [Path("dump_last_10_frames_20260507_135316.pkl")] # nearby buble build 1st floor
+#DUMP_FILE_list = [Path("dump_last_10_frames_20260507_135626.pkl")] # bridge after los
+DUMP_FILE_list = [Path("dump_last_10_frames_20260507_135806.pkl")] # bridge before rainbow part
+
+# dump_last_10_frames_20260507_121538.pkl
+# dump_last_10_frames_2GHZ_40m_chair.pkl
+# dump_last_10_frames_20260507_122355.pkl 20mhz
+
+# dump_last_10_frames_20260507_134059.pkl 20mhz
 
 plot_time_domain = True
 
@@ -116,11 +130,28 @@ preloaded_frame_idx = 0
 data = preloaded_frames[0]
 
 gain_avg = list()
+evm_avg = dict()
 Rhh_list = list()
+
+for idx, (mimo, rec_name) in enumerate(cfg_test):
+    evm_avg[rec_name] = list()
 
 for preloaded_frame_idx in range(len(preloaded_frames)):
     ### SDR reception
     data = preloaded_frames[preloaded_frame_idx]
+
+    # raw spectrum
+    if plot_time_domain:
+        N_fft_in = data.shape[1]
+        data_fft = np.fft.fft(data, n=N_fft_in,  axis=1, norm='ortho')
+        psd = np.mean(data_fft, axis=0)
+
+        fig, ax = plt.subplots()
+        ax.plot(range(N_fft_in), 10.0 * np.log10( psd ) )
+        ax.grid()
+        ax.set_xlabel('FFT idx')
+        ax.set_ylabel('PSD')
+        plt.show()
 
     evm_bl = np.zeros(Ntx)
 
@@ -166,12 +197,13 @@ for preloaded_frame_idx in range(len(preloaded_frames)):
                 h_ls_avg = np.mean(h_ls_tensor, axis=2)
 
                 Nfft = int(2**(np.ceil(np.log2(Nls_c))))
-                h_time = np.fft.ifft(h_ls_avg, axis=-1)
+                h_time = np.fft.ifft(h_ls_avg, axis=-1, norm='ortho')
 
                 pdp_time = np.mean(np.abs(h_time)**2, axis=(0,1))
 
                 fig, ax = plt.subplots()
-                ax.plot(range(Nfft), pdp_time, label=f'tti={preloaded_frame_idx}')
+                ax.plot(range(Nfft), 10.0 * np.log10( pdp_time ), label=f'tti={preloaded_frame_idx}')
+                #ax.semilogy(range(Nfft), 10.0 * np.log10(pdp_time), label=f'tti={preloaded_frame_idx}')
                 ax.set_xlabel('Time idx iFFT')
                 ax.set_ylabel('PDP')
                 ax.grid()
@@ -183,6 +215,8 @@ for preloaded_frame_idx in range(len(preloaded_frames)):
 
         Rhh_list.append(Rhh)
 
+        evm_avg[rec_name].append(np.mean(evm_arr))
+
         if idx == 0:
             evm_bl = evm_arr
             print(f'Idx{preloaded_frame_idx}: ber={ber_c} evm={evm_arr} MimoMode={mimo}')
@@ -191,7 +225,11 @@ for preloaded_frame_idx in range(len(preloaded_frames)):
             gain_avg.append(np.mean(gain_evm))
             print(f'Idx{preloaded_frame_idx}: ber={ber_c} evm={evm_arr} MimoMode={mimo} EVMgain={gain_evm}')
 
-print(f'Average EVM gain = {np.mean(gain_avg)}')
+
+for key_c in evm_avg.keys():
+    print(f'rec={key_c} , EVMavg= {np.mean(np.array(evm_avg[key_c]))}')
+
+#print(f'Average EVM gain = {np.mean(gain_avg)}')
 
 if False:
     Rhh0 = Rhh_list[0]
