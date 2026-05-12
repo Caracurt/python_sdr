@@ -9,7 +9,8 @@ import tensorflow as tf
 import sionna as sn
 import json
 from system_tx import SysParUL
-
+import pickle
+from pathlib import Path
 
 def init_tx_dict():
 
@@ -238,7 +239,22 @@ def main():
     else:
         repeated_frame_tx = repeated_frame[:, 0]
 
-    tx_gain0 = -20
+    tx_gain0 = 0
+    save_tx = False
+    if save_tx:
+        dump_tx = repeated_frame_tx
+
+        file_name = f'dump_tx_fs{inPar.sample_rate//1e6:.0f}MHZ_QAM{2**inPar.num_bits_sym}.pkl'
+
+        out_path = Path(file_name)
+
+        with out_path.open("wb") as f:
+            pickle.dump(dump_tx, f)
+
+    # check load
+    # with out_path.open("rb") as dump_fd:
+    #     dump_check = pickle.load(dump_fd)
+
 
     if not inPar.dummyTx:
         #sdr = adi.Pluto('ip:192.168.3.3') # interfere cfg
