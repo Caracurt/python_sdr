@@ -12,6 +12,8 @@ from system_tx import SysParUL
 import pickle
 from pathlib import Path
 
+from scipy.signal import butter, filtfilt
+
 def init_tx_dict():
 
     with open('inPar_default.json', 'r') as f:
@@ -171,6 +173,16 @@ def create_data_frame(inPar : SysParUL):
     # mod data tx output
     mod_data_tx = list() # per Tx , complex array Nsc_avg x Ndatas
 
+    order = inPar.filtOrd  # порядок фильтра
+    cutoff = inPar.filtCut  # критическая частота
+
+    # Проектирование фильтра
+    b, a = butter(order, cutoff, btype='low')
+
+    # Применение фильтра к сигналу
+    #filtered_signal = filtfilt(b, a, PDin)
+
+
     for tx_idx in range(inPar.Ntx):
 
 
@@ -207,6 +219,10 @@ def create_data_frame(inPar : SysParUL):
         frame = np.concatenate((preamble, pilot_rep, data_unwrap, guard))
 
         repeated_frame = np.tile(frame, reps=(2, 1)) # could be 2 to avoid edge effects during transmission
+
+        if inPar.filtOFDM:
+            filt_out = filtfilt(b, a, repeated_frame[:, 0])
+            repeated_frame[:, 0] = filt_out
 
         if len(repeated_frame_tx) == 0:
             repeated_frame_tx = repeated_frame

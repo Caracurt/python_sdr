@@ -17,5 +17,8 @@
   "CR" : 0.25,
   "dummyTx": 0,
   "dummyRx" : 0,
-  "SNR_dummy" : -3.0
+  "SNR_dummy" : -3.0,
+  "filtOFDM" : 1,
+  "filtOrd" : 4,
+  "filtCut" : 0.65
 }

@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import numpy as np
 
+from scipy.signal import butter, filtfilt
+
 def plot_psd(sigs, fs, Nfft):
 
 
@@ -27,6 +29,18 @@ with dump_file.open('rb') as f:
 fs_base = float(re.findall('_fs(\d+)', file_name)[0]) * 1e6
 Nfft = 1024
 
+# apply filter
+# Параметры фильтра
+order = 4  # порядок фильтра
+cutoff = 0.65  # критическая частота
+
+# Проектирование фильтра
+b, a = butter(order, cutoff, btype='low')
+
+# Применение фильтра к сигналу
+filtered_signal = filtfilt(b, a, PDin)
+
+PDin = filtered_signal
 
 
 plt.clf()

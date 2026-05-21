@@ -23,6 +23,10 @@ class SysParUL:
         self.dummyRx = inPar_dict["dummyRx"]
         self.SNR_dummy = inPar_dict["SNR_dummy"] # SNR for dummy Rx
 
+        self.filtOFDM = inPar_dict["filtOFDM"]
+        self.filtOrd = inPar_dict["filtOrd"]
+        self.filtCut = inPar_dict["filtCut"]
+
 
         self.Ndata = inPar_dict["Ndata"]
 
